@@ -81,6 +81,36 @@ bash scripts/download_dnsmos.sh
 python3 evaluate.py original.wav processed.wav
 ```
 
+## 🗣️ 보이스 클로닝: 내 목소리로 대본 읽어주기 (Apple Silicon 전용)
+
+목소리가 담긴 파일(영상도 됨)을 주면, 그 목소리로 대본을 읽은 오디오를 만든다.
+
+```bash
+pip install -r voice/requirements-voice.txt
+python3 voice/clone_say.py --ref 내목소리.mov --text "안녕하세요" -o out.wav
+python3 voice/clone_say.py --ref 내목소리.wav --script 대본.txt -o out.wav --fast
+```
+
+파이프라인: 오디오 추출 → **RNNoise 노이즈 제거**(위 도구 재사용) → Whisper 받아쓰기 →
+**Qwen3-TTS 1.7B**(Apache 2.0)로 생성. 전부 로컬에서 실행된다.
+
+"지표 먼저 → 후보 경쟁 → 최고 선택" 방식으로 설정을 확정했다.
+화자 유사도(SIM, 스피커 임베딩 코사인) / 글자 오류율(CER, Whisper 받아쓰기 대조) /
+자연스러움(DNSMOS)으로 5개 조합을 채점한 결과:
+
+| 지표 | 우승 설정 (1.7B + 노이즈 제거 참조) | 기준 |
+|------|------|------|
+| SIM | **0.917~0.945** | 본인 육성끼리 비교 시 0.909 |
+| CER | **0%** | 숫자·영어 혼용 대본 포함 |
+| MOS | **3.50** | 원본 녹음 3.24 |
+
+주요 발견: 참조 음성을 노이즈 제거하면 모든 조합에서 SIM이 오른다 (+0.02).
+평가 재현은 `voice/evaluate_tts.py` 참고.
+
+> ⚠️ **본인 목소리이거나 명시적으로 동의받은 목소리만** 클로닝할 것.
+> 타인 목소리 무단 클로닝은 법적 문제와 악용(보이스피싱 등) 소지가 있다.
+> AI 생성 음성을 콘텐츠에 쓸 때는 고지하는 것을 권장한다.
+
 ## 폴더 구성
 
 ```

@@ -1,0 +1,9 @@
+# 보이스 클로닝 (voice/clone_say.py) 전용 — Apple Silicon 맥 필요
+mlx-audio
+mlx-whisper
+# 품질 평가(evaluate_tts.py)까지 쓰려면:
+# resemblyzer
+# jiwer
+# onnxruntime
+# librosa
+# setuptools<81   # resemblyzer의 webrtcvad가 pkg_resources를 아직 씀
