@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>노이즈 클리너</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #181b22; --line: #2a2f3a;
+    --text: #e8eaf0; --sub: #9aa3b2; --accent: #5b6cff; --ok: #3ecf8e; --err: #ff6b6b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6f8; --card: #ffffff; --line: #e3e6ec; --text: #1b1f27; --sub: #5d6674; }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Apple SD Gothic Neo", "Pretendard", sans-serif;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  main { width: 100%; max-width: 520px; }
+  h1 { font-size: 1.5rem; margin-bottom: 6px; }
+  p.sub { color: var(--sub); font-size: .9rem; margin-bottom: 24px; line-height: 1.5; }
+  #drop {
+    background: var(--card); border: 2px dashed var(--line); border-radius: 16px;
+    padding: 48px 24px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  #drop.over { border-color: var(--accent); background: rgba(91,108,255,.08); }
+  #drop .icon { font-size: 2.2rem; margin-bottom: 10px; }
+  #drop strong { display: block; margin-bottom: 4px; }
+  #drop span { color: var(--sub); font-size: .85rem; }
+  input[type=file] { display: none; }
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 18px; color: var(--sub); font-size: .9rem; }
+  .row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .row output { min-width: 52px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  button {
+    width: 100%; margin-top: 18px; padding: 14px; border: 0; border-radius: 12px;
+    background: var(--accent); color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  #status { margin-top: 16px; font-size: .9rem; color: var(--sub); text-align: center; min-height: 1.4em; }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite;
+    vertical-align: -2px; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  progress { width: 100%; margin-top: 10px; accent-color: var(--accent); height: 6px; }
+  footer { margin-top: 22px; text-align: center; color: var(--sub); font-size: .78rem; line-height: 1.6; }
+  footer a { color: var(--sub); }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎙️ 노이즈 클리너</h1>
+  <p class="sub">영상·음성에서 목소리는 그대로 두고 배경 소음만 제거합니다.<br>
+  모든 처리가 <b>이 브라우저 안에서만</b> 일어나고, 파일은 어디로도 전송되지 않습니다.</p>
+
+  <div id="drop">
+    <div class="icon">📂</div>
+    <strong id="fileLabel">파일을 끌어다 놓거나 클릭해서 선택</strong>
+    <span>mov · mp4 · mkv · wav · m4a · mp3 (수 분 이내 분량 권장)</span>
+    <input type="file" id="file" accept=".mov,.mp4,.m4v,.mkv,.wav,.m4a,.mp3,.aac">
+  </div>
+
+  <div class="row">
+    <label for="boost">볼륨 키우기</label>
+    <input type="range" id="boost" min="0" max="20" step="1" value="0">
+    <output id="boostVal">0 dB</output>
+  </div>
+
+  <button id="go" disabled>노이즈 제거하기</button>
+  <progress id="prog" value="0" max="100" hidden></progress>
+  <div id="status"></div>
+
+  <footer>RNNoise + ffmpeg.wasm · 원본 파일은 수정되지 않습니다 ·
+  <a href="https://github.com/devKangMinHyeok/denoise-app">GitHub</a></footer>
+</main>
+
+<script type="module">
+import { FFmpeg } from './vendor/ffmpeg/index.js';
+import { fetchFile } from './vendor/util/index.js';
+
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+const fileLabel = document.getElementById('fileLabel');
+const boost = document.getElementById('boost');
+const boostVal = document.getElementById('boostVal');
+const go = document.getElementById('go');
+const status = document.getElementById('status');
+const prog = document.getElementById('prog');
+let picked = null;
+let ffmpeg = null;
+
+const VIDEO_EXTS = ['mov', 'mp4', 'm4v', 'mkv'];
+
+function setStatus(html, cls = '') { status.className = cls; status.innerHTML = html; }
+
+function setFile(f) {
+  picked = f;
+  fileLabel.textContent = f ? f.name : '파일을 끌어다 놓거나 클릭해서 선택';
+  go.disabled = !f;
+  setStatus('');
+}
+drop.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+['dragenter','dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', ev => setFile(ev.dataTransfer.files[0]));
+boost.addEventListener('input', () => boostVal.textContent = boost.value + ' dB');
+
+async function loadFFmpeg() {
+  if (ffmpeg) return ffmpeg;
+  setStatus('<span class="spinner"></span>변환 엔진(ffmpeg.wasm) 내려받는 중… 최초 1회, 약 30MB');
+  const f = new FFmpeg();
+  f.on('log', ({ message }) => console.log('[ffmpeg]', message));
+  f.on('progress', ({ progress }) => {
+    if (progress > 0 && progress <= 1) prog.value = Math.round(progress * 100);
+  });
+  await f.load({
+    coreURL: new URL('./vendor/core/ffmpeg-core.js', location.href).href,
+    wasmURL: new URL('./vendor/core/ffmpeg-core.wasm', location.href).href,
+  });
+  ffmpeg = f;
+  return f;
+}
+
+async function processFile(file, boostDb) {
+  const f = await loadFFmpeg();
+  const name = file.name.replace(/\.[^.]+$/, '');
+  const ext = (file.name.split('.').pop() || 'mov').toLowerCase();
+  const isVideo = VIDEO_EXTS.includes(ext);
+  const outExt = ext === 'mp3' ? 'm4a' : ext;
+  const inName = 'in.' + ext, outName = 'out.' + outExt;
+
+  setStatus('<span class="spinner"></span>파일 준비 중…');
+  await f.writeFile(inName, await fetchFile(file));
+  await f.writeFile('rnnoise-sh.rnnn', await fetchFile('./rnnoise-sh.rnnn'));
+
+  let af = 'aformat=channel_layouts=mono,arnndn=m=rnnoise-sh.rnnn';
+  if (boostDb > 0) af += `,volume=${boostDb}dB`;
+
+  const args = ['-i', inName];
+  if (isVideo) args.push('-c:v', 'copy');
+  args.push('-af', af);
+  if (outExt === 'wav') args.push('-c:a', 'pcm_s16le');
+  else args.push('-c:a', 'aac', '-b:a', '192k');
+  args.push(outName);
+
+  setStatus('<span class="spinner"></span>노이즈 제거 중… 파일 길이에 따라 시간이 걸려요');
+  prog.hidden = false; prog.value = 0;
+  const code = await f.exec(args);
+  prog.hidden = true;
+  if (code !== 0) throw new Error('변환 실패 (콘솔 로그 참고)');
+
+  const data = await f.readFile(outName);
+  await f.deleteFile(inName).catch(() => {});
+  await f.deleteFile(outName).catch(() => {});
+  return { blob: new Blob([data.buffer], { type: isVideo ? 'video/mp4' : 'audio/mp4' }),
+           name: `${name}_clean.${outExt}` };
+}
+window.__processFile = processFile; // 테스트용 훅
+
+go.addEventListener('click', async () => {
+  if (!picked) return;
+  go.disabled = true;
+  try {
+    const { blob, name } = await processFile(picked, Number(boost.value));
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    URL.revokeObjectURL(url);
+    setStatus('✅ 완료! 다운로드 폴더를 확인하세요 — ' + name, 'ok');
+  } catch (e) {
+    setStatus('❌ ' + e.message, 'err');
+  } finally {
+    go.disabled = false;
+    prog.hidden = true;
+  }
+});
+</script>
+</body>
+</html>
