@@ -1,0 +1,8 @@
+# 웹 서버 실행에 필요
+flask>=3.0
+
+# (선택) 품질 평가 evaluate.py 를 쓸 때만 필요
+# numpy
+# librosa
+# onnxruntime
+# soundfile

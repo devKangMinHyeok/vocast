@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>노이즈 클리너</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #181b22; --line: #2a2f3a;
+    --text: #e8eaf0; --sub: #9aa3b2; --accent: #5b6cff; --ok: #3ecf8e; --err: #ff6b6b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6f8; --card: #ffffff; --line: #e3e6ec; --text: #1b1f27; --sub: #5d6674; }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Apple SD Gothic Neo", "Pretendard", sans-serif;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  main { width: 100%; max-width: 520px; }
+  h1 { font-size: 1.5rem; margin-bottom: 6px; }
+  p.sub { color: var(--sub); font-size: .9rem; margin-bottom: 24px; line-height: 1.5; }
+  #drop {
+    background: var(--card); border: 2px dashed var(--line); border-radius: 16px;
+    padding: 48px 24px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  #drop.over { border-color: var(--accent); background: rgba(91,108,255,.08); }
+  #drop .icon { font-size: 2.2rem; margin-bottom: 10px; }
+  #drop strong { display: block; margin-bottom: 4px; }
+  #drop span { color: var(--sub); font-size: .85rem; }
+  input[type=file] { display: none; }
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 18px; color: var(--sub); font-size: .9rem; }
+  .row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .row output { min-width: 52px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  button {
+    width: 100%; margin-top: 18px; padding: 14px; border: 0; border-radius: 12px;
+    background: var(--accent); color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  #status { margin-top: 16px; font-size: .9rem; color: var(--sub); text-align: center; min-height: 1.4em; }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite;
+    vertical-align: -2px; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  footer { margin-top: 22px; text-align: center; color: var(--sub); font-size: .78rem; line-height: 1.6; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎙️ 노이즈 클리너</h1>
+  <p class="sub">영상·음성에서 목소리는 그대로 두고 배경 소음만 제거합니다.<br>
+  모든 처리는 이 컴퓨터 안에서만 이루어집니다.</p>
+
+  <div id="drop">
+    <div class="icon">📂</div>
+    <strong id="fileLabel">파일을 끌어다 놓거나 클릭해서 선택</strong>
+    <span>mov · mp4 · mkv · wav · m4a · mp3</span>
+    <input type="file" id="file" accept=".mov,.mp4,.m4v,.mkv,.wav,.m4a,.mp3,.aac">
+  </div>
+
+  <div class="row">
+    <label for="boost">볼륨 키우기</label>
+    <input type="range" id="boost" min="0" max="20" step="1" value="0">
+    <output id="boostVal">0 dB</output>
+  </div>
+
+  <button id="go" disabled>노이즈 제거하기</button>
+  <div id="status"></div>
+
+  <footer>RNNoise 기반 · 원본 파일은 수정되지 않습니다</footer>
+</main>
+
+<script>
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+const fileLabel = document.getElementById('fileLabel');
+const boost = document.getElementById('boost');
+const boostVal = document.getElementById('boostVal');
+const go = document.getElementById('go');
+const status = document.getElementById('status');
+let picked = null;
+
+function setFile(f) {
+  picked = f;
+  fileLabel.textContent = f ? f.name : '파일을 끌어다 놓거나 클릭해서 선택';
+  go.disabled = !f;
+  status.textContent = ''; status.className = '';
+}
+drop.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+['dragenter','dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', ev => setFile(ev.dataTransfer.files[0]));
+boost.addEventListener('input', () => boostVal.textContent = boost.value + ' dB');
+
+go.addEventListener('click', async () => {
+  if (!picked) return;
+  go.disabled = true;
+  status.className = '';
+  status.innerHTML = '<span class="spinner"></span>처리 중… 파일 길이에 따라 수십 초 걸릴 수 있어요';
+  const fd = new FormData();
+  fd.append('file', picked);
+  fd.append('boost', boost.value);
+  try {
+    const res = await fetch('/api/denoise', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || ('서버 오류 ' + res.status));
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)/i);
+    const name = m ? decodeURIComponent(m[1]) : 'clean_' + picked.name;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    URL.revokeObjectURL(url);
+    status.className = 'ok';
+    status.textContent = '✅ 완료! 다운로드 폴더를 확인하세요 — ' + name;
+  } catch (e) {
+    status.className = 'err';
+    status.textContent = '❌ ' + e.message;
+  } finally {
+    go.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
