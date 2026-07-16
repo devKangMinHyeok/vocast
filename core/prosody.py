@@ -33,7 +33,8 @@ def _load_utmos():
     if _utmos_model is None:
         import torch
         _utmos_model = torch.hub.load(
-            "tarepan/SpeechMOS:v1.2.0", "utmos22_strong", trust_repo=True)
+            "tarepan/SpeechMOS:v1.2.0", "utmos22_strong", trust_repo=True,
+            skip_validation=True)  # CI 러너에서 GitHub API 검증이 깨지는 torch.hub 버그 회피
     return _utmos_model
 
 
