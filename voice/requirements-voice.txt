@@ -1,11 +1,12 @@
 # 보이스 클로닝 (voice/clone_say.py) 전용 — Apple Silicon 맥 필요
 mlx-audio
 mlx-whisper
-# 운율 북극성(PNS) 채점 + best-of-N 테이크 선별에 필요
+# 운율 북극성(PNS) 채점 + best-of-N 테이크 선별 + 참조 억양 증폭에 필요
 librosa
 soundfile
 torch
 torchaudio
+pyworld
 # (선택) 품질 평가 evaluate_tts.py / quality까지 쓸 때만 필요
 # resemblyzer
 # jiwer

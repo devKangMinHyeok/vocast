@@ -66,7 +66,7 @@ def main():
                 out = os.path.join(wd, f"gen_{i}.wav")
                 print(f"· [{i}/{len(scripts)}] 생성(best-of-N): {script[:30]}…")
                 synthesize_best(script, ref_wav, ref_text, natural_wav, out,
-                                fast=args.fast)
+                                fast=args.fast, takes=5)
             r = evaluate_clone(ref_wav, script, out, natural_wav=natural_wav)
             r["script"] = script
             results.append(r)

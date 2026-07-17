@@ -13,9 +13,10 @@ from core.denoise import build_audio_filter  # noqa: E402
 from core.audio import audio_codec_args  # noqa: E402
 from core.metrics import (GATES, SIM_HUMAN_BASELINE, check_gates,  # noqa: E402
                           normalize_ko, voice_clone_score)
-from core.prosody import (BREATH_MIN, band_score,  # noqa: E402
-                          boundary_pause_adequacy, prosody_match_scores,
-                          prosody_naturalness_score, split_sentences)
+from core.prosody import (BREATH_MIN, LIVELINESS, band_score,  # noqa: E402
+                          boundary_pause_adequacy, dynamics_score,
+                          prosody_match_scores, prosody_naturalness_score,
+                          split_sentences)
 
 
 # ---- 노이즈 제거 필터 체인 ----
@@ -101,6 +102,31 @@ def test_gates_include_pns():
     ok, failures = check_gates({"sim": 0.92, "cer": 0.0, "mos": 3.5,
                                 "vcs": 92.0, "pns": 70.0})
     assert not ok and any("PNS" in f for f in failures)
+
+
+# ---- F0 역동성 (비대칭 스코어) ----
+
+def test_dynamics_asymmetric():
+    # 목표 대비 부족(단조로움)은 벌점, 같은 배율의 초과(1.6배 이내)는 허용
+    deficit = dynamics_score(0.65, 1.0)
+    excess = dynamics_score(1.5, 1.0)
+    assert deficit < excess == 1.0
+
+
+def test_dynamics_flat_is_zero():
+    assert dynamics_score(0.0, 4.0) == pytest.approx(0.0, abs=1e-3)
+
+
+def test_liveliness_target_raises_bar():
+    """활기 목표(×1.25): 참조와 똑같은 역동성은 이제 만점이 아니다."""
+    ref = {"f0_st_std": 4.0, "f0_span_st": 12.0, "f0_move": 4.0,
+           "pause_ratio": 0.1, "pause_rate": 0.3, "npvi": 50, "duration": 15}
+    same = prosody_match_scores({**ref}, ref)
+    lively = prosody_match_scores(
+        {**ref, "f0_st_std": 4.0 * LIVELINESS, "f0_span_st": 12.0 * LIVELINESS,
+         "f0_move": 4.0 * LIVELINESS}, ref)
+    assert lively["f0"] == pytest.approx(1.0)
+    assert same["f0"] < 1.0
 
 
 # ---- 문장 경계 호흡 (BPA) ----

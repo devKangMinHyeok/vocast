@@ -33,8 +33,8 @@ jobs:
           pip install resemblyzer jiwer onnxruntime librosa "setuptools<81" pytest
       - name: Unit tests
         run: pytest tests -q
-      - name: Quality eval (score golden sample → gate)
-        run: python3 quality/run_eval.py --golden --limit 1 --report quality-report.json
+      - name: Quality eval (score golden samples → gate)
+        run: python3 quality/run_eval.py --golden --report quality-report.json
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4

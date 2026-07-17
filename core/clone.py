@@ -56,6 +56,18 @@ def prepare_reference(ref_path, workdir, max_sec=MAX_REF_SEC):
     if not text:
         raise RuntimeError("참조 파일에서 말소리를 찾지 못했습니다. "
                            "발화가 또렷한 구간이 필요해요.")
+
+    # 참조 억양 증폭 (적응적): 차분한 화자만 필요한 만큼 높낮이를 키운다.
+    # 이미 활기찬 화자는 α≈1 → 생략. 받아쓰기는 증폭 전 오디오로 이미 확보.
+    try:
+        from .prosody import (exaggerate_pitch, prosody_features,
+                              reference_exaggeration_alpha)
+        alpha = reference_exaggeration_alpha(prosody_features(full_clean))
+        if alpha >= 1.05:
+            clean = exaggerate_pitch(
+                clean, os.path.join(workdir, "ref_lively.wav"), alpha)
+    except ImportError:
+        pass
     return clean, text, full_clean
 
 

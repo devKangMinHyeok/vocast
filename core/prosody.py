@@ -55,14 +55,30 @@ def prosody_features(wav_path):
     y, _ = librosa.effects.trim(y, top_db=35)
     dur = len(y) / sr
 
-    # ① F0 변동성 (세미톤 표준편차) — 억양의 살아있음
+    # ① F0 역동성 3종 — 억양의 살아있음 (세미톤 기준)
+    #    std: 국소 변동 / span: 음역대(P10~P90) / move: 시간 창별 음높이
+    #    중심의 이동(멜로디 움직임 — "일정하게만 말하는" 단조로움을 잡음)
     f0 = librosa.pyin(y, fmin=_PYIN_FMIN, fmax=_PYIN_FMAX, sr=sr,
                       frame_length=1024)[0]
-    f0v = f0[~np.isnan(f0)]
+    voiced = ~np.isnan(f0)
+    f0v = f0[voiced]
     if len(f0v) > 10:
-        f0_st_std = float(np.std(12 * np.log2(f0v / np.median(f0v))))
+        st = 12 * np.log2(f0v / np.median(f0v))
+        f0_st_std = float(np.std(st))
+        f0_span_st = float(np.percentile(st, 90) - np.percentile(st, 10))
+        # 0.5초 창별 유성음 F0 중앙값의 표준편차 (세미톤)
+        frames_per_win = max(1, int(0.5 / (512 / sr)))  # pyin hop=512
+        st_full = np.full(len(f0), np.nan)
+        st_full[voiced] = st
+        centers = []
+        for w in range(0, len(st_full) - frames_per_win, frames_per_win):
+            win = st_full[w: w + frames_per_win]
+            win = win[~np.isnan(win)]
+            if len(win) >= frames_per_win // 4:
+                centers.append(np.median(win))
+        f0_move = float(np.std(centers)) if len(centers) >= 3 else 0.0
     else:
-        f0_st_std = 0.0
+        f0_st_std = f0_span_st = f0_move = 0.0
 
     # ② 휴지(호흡) 패턴 — 30ms 프레임 에너지로 무음 구간 검출
     hop = int(sr * 0.03)
@@ -96,7 +112,8 @@ def prosody_features(wav_path):
     else:
         npvi = 0.0
 
-    return {"f0_st_std": f0_st_std, "pause_ratio": pause_ratio,
+    return {"f0_st_std": f0_st_std, "f0_span_st": f0_span_st,
+            "f0_move": f0_move, "pause_ratio": pause_ratio,
             "pause_rate": pause_rate, "npvi": npvi, "duration": dur}
 
 
@@ -111,6 +128,54 @@ def band_score(gen_val, ref_val, tolerance=0.3, floor_octaves=0.7):
     return float(np.clip(1 - max(0.0, x - allowed) / floor_octaves, 0.0, 1.0))
 
 
+LIVELINESS = 1.25  # 역동성 목표 계수 — 참조 화자의 차분한 녹음보다 이만큼 활기차게
+# 활기 절대 상한 (세미톤): 이미 이 수준 이상으로 활기찬 화자는 자기 수준 유지.
+# 근거: '활기찬 낭독' 실측치(사용자 목표 수준·표현력 있는 AI 프리셋 수준) 사이값.
+LIVELY_CAPS = {"f0_st_std": 5.5, "f0_span_st": 13.5, "f0_move": 5.0}
+TRANSFER_EFFICIENCY = 0.6  # 참조 증폭 → 출력 역동성 전달률 (실측 ~60%)
+
+
+def dynamics_targets(ref_feats):
+    """역동성 목표: 참조 × LIVELINESS, 단 절대 상한과 자기 수준 중 큰 값으로 캡.
+
+    차분한 화자(예: 설명 톤 녹음)는 목표가 올라가고, 이미 활기찬 화자는
+    자기 수준만 유지하면 된다. 순수 함수 — 유닛 테스트 대상.
+    """
+    targets = {}
+    for k, cap in LIVELY_CAPS.items():
+        r = max(float(ref_feats.get(k, 1e-6)), 1e-6)
+        targets[k] = min(r * LIVELINESS, max(r, cap))
+    return targets
+
+
+def reference_exaggeration_alpha(natural_feats):
+    """참조 증폭 계수 α를 필요한 만큼만 (적응적).
+
+    필요 배율 = 목표/자연 수준의 평균. 전달률(~60%)을 보정해 α로 환산.
+    이미 활기찬 화자는 α≈1 → 증폭 생략(보코더 처리 자체를 건너뜀).
+    """
+    targets = dynamics_targets(natural_feats)
+    ratios = [targets[k] / max(float(natural_feats.get(k, 1e-6)), 1e-6)
+              for k in LIVELY_CAPS]
+    needed = float(np.mean(ratios))
+    return float(np.clip(1.0 + (needed - 1.0) / TRANSFER_EFFICIENCY, 1.0, 1.7))
+
+
+def dynamics_score(gen_val, ref_val, full_credit_at=0.85):
+    """F0 역동성 비대칭 스코어 (0~1). 목표 대비 부족은 강하게 벌점,
+    약간의 초과(1.6배까지)는 허용 — 청취 피드백('높낮이가 더 있었으면')과
+    문헌('활기찰수록 F0 변동이 큼')의 방향성. full_credit_at은 짧은 클립의
+    통계 변동 보정용(호출부에서 길이에 따라 완화). 순수 함수."""
+    g = max(float(gen_val), 1e-6)
+    r = max(float(ref_val), 1e-6)
+    ratio = g / r
+    if ratio < full_credit_at:  # 부족: 감점, 0.35배에서 0점
+        return float(np.clip((ratio - 0.35) / (full_credit_at - 0.35), 0.0, 1.0))
+    if ratio <= 1.6:   # 자연 범위
+        return 1.0
+    return float(np.clip(1.0 - (ratio - 1.6) / 1.4, 0.0, 1.0))  # 과장: 3배에서 0점
+
+
 def prosody_match_scores(gen_feats, ref_feats):
     """참조 화자 자연 발화 대비 운율 일치도 3항 (각 0~1).
 
@@ -121,7 +186,15 @@ def prosody_match_scores(gen_feats, ref_feats):
     dur = max(gen_feats.get("duration", 10.0), 1.0)
     scale = float(np.clip(np.sqrt(10.0 / dur), 1.0, 2.0))
     tol_stat = 0.3 * scale
-    s_f0 = band_score(gen_feats["f0_st_std"], ref_feats["f0_st_std"])
+    # F0 항 = 역동성 3종(std·span·move)의 비대칭 스코어 평균.
+    # 목표는 dynamics_targets (참조×활기 계수, 절대 상한 캡).
+    # 짧은 클립은 F0 통계 표본도 적으므로 만점 문턱을 길이에 따라 완화.
+    targets = dynamics_targets(ref_feats)
+    full_credit = max(0.75, 0.85 - 0.1 * (scale - 1.0))
+    s_f0 = float(np.mean([
+        dynamics_score(gen_feats.get(k, 0), targets[k],
+                       full_credit_at=full_credit) for k in LIVELY_CAPS
+    ]))
     s_pause = 0.5 * (band_score(gen_feats["pause_ratio"], ref_feats["pause_ratio"],
                                 tolerance=tol_stat)
                      + band_score(gen_feats["pause_rate"], ref_feats["pause_rate"],
@@ -296,6 +369,36 @@ def prosody_deps_available():
     import importlib.util
     return all(importlib.util.find_spec(m) is not None
                for m in ("librosa", "torch"))
+
+
+def exaggerate_pitch(in_wav, out_wav, alpha):
+    """WORLD 보코더로 F0 편차를 α배 증폭 (음색·중심 음높이는 유지).
+
+    출력이 아니라 **참조 음성**에 쓴다 — 출력에 직접 쓰면 보코더 아티팩트로
+    UTMOS가 3.95→3.2로 폭락(실측 기각). 참조에 쓰면 클론이 억양만 물려받고
+    오디오는 순수 TTS 생성이라 깨끗하다 (실측: UTMOS -0.14, 역동성 목표 도달).
+    """
+    import librosa
+    import pyworld
+    import soundfile as sf
+    y, sr = librosa.load(in_wav, sr=24_000, mono=True)
+    y = y.astype(np.float64)
+    f0, t = pyworld.harvest(y, sr)
+    sp = pyworld.cheaptrick(y, f0, t, sr)
+    ap = pyworld.d4c(y, f0, t, sr)
+    voiced = f0 > 0
+    if not voiced.any():
+        sf.write(out_wav, y.astype(np.float32), sr)
+        return out_wav
+    med = np.median(f0[voiced])
+    f0_new = f0.copy()
+    f0_new[voiced] = med * (f0[voiced] / med) ** alpha
+    out = pyworld.synthesize(f0_new, sp, ap, sr)
+    peak = np.abs(out).max()
+    if peak > 0:
+        out = out / peak * np.abs(y).max()
+    sf.write(out_wav, out.astype(np.float32), sr)
+    return out_wav
 
 
 def select_reference_window(full_wav, min_sec=6.0, max_sec=14.0):
