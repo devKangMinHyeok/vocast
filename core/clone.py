@@ -100,7 +100,11 @@ def synthesize(text, ref_wav, ref_text, output_path, fast=False, retries=1,
     raise RuntimeError(f"TTS 생성 실패 (재시도 포함 {1 + retries}회): {detail}")
 
 
-PNS_TARGET = 82.0  # 운율 북극성 목표 — 이 점수를 넘는 테이크가 나오면 조기 채택
+# 게이트(82)는 릴리스 최저 보증선이고, 선별 조기종료 목표는 그보다 높게 잡는다 —
+# 목표를 게이트와 같게 두면 출력이 항상 "합격선 언저리"에 머문다 (청취 피드백으로 실측:
+# 조기종료 82 시절 웹 출력 PNS 82.5 vs 베스트 테이크 87.0).
+PNS_TARGET = 87.0  # 이 점수를 넘는 테이크가 나오면 조기 채택
+DEFAULT_TAKES = 4  # 일반 모드 테이크 수
 BREATH_TARGET = (0.5, 0.7)  # 문장 경계 호흡 삽입 목표 범위(초) — 읽기 발화 실측 분포
 
 
@@ -141,7 +145,7 @@ def ensure_breath_pauses(wav_path, script):
 
 
 def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
-                    fast=False, takes=3):
+                    fast=False, takes=DEFAULT_TAKES):
     """best-of-N 테이크: 여러 번 생성해 운율 점수(PNS) 최고 테이크를 채택.
 
     생성은 확률적이라 테이크 편차가 크다 (실측: 같은 설정으로 50~84점).
@@ -179,7 +183,7 @@ def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
     return output_path, best_pns
 
 
-def clone_voice(ref_path, text, output_path, fast=False, takes=3):
+def clone_voice(ref_path, text, output_path, fast=False, takes=DEFAULT_TAKES):
     """참조 파일 + 대본 → 클론 음성. 전체 파이프라인 한 번에. (앱 계층 진입점)"""
     with tempfile.TemporaryDirectory() as wd:
         ref_wav, ref_text, full_clean = prepare_reference(ref_path, wd)

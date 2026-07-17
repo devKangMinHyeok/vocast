@@ -26,8 +26,8 @@ def main():
     g.add_argument("--script", help="읽어줄 대본 텍스트 파일")
     ap.add_argument("-o", "--output", default="cloned_voice.wav", help="출력 wav 경로")
     ap.add_argument("--fast", action="store_true", help="가벼운 0.6B 모델 사용 (약간 낮은 품질)")
-    ap.add_argument("--takes", type=int, default=3,
-                    help="테이크 수 — 여러 번 생성해 운율 점수(PNS) 최고를 채택 (기본 3, 1=최속)")
+    ap.add_argument("--takes", type=int, default=4,
+                    help="테이크 수 — 여러 번 생성해 운율 점수(PNS) 최고를 채택 (기본 4, 1=최속)")
     args = ap.parse_args()
 
     try:

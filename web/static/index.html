@@ -192,7 +192,7 @@ $('clText').addEventListener('input', clReady);
 $('clGo').onclick = async () => {
   $('clGo').disabled = true;
   $('clAudio').style.display = 'none';
-  setStatus($('clStatus'), '<span class="spinner"></span>참조 분석 + 생성 중… 1~3분 정도 걸려요 (최초엔 모델 다운로드로 더 걸릴 수 있음)');
+  setStatus($('clStatus'), '<span class="spinner"></span>참조 분석 + 여러 테이크 생성·선별 중… 3~5분 정도 걸려요 (빠른 모드는 ~1분)');
   const fd = new FormData();
   fd.append('ref', clPicked);
   fd.append('text', $('clText').value.trim());
