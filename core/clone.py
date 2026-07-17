@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 
+from . import ROOT
 from .audio import run_ffmpeg
 
 MODEL_BEST = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
@@ -76,16 +77,70 @@ def prepare_reference(ref_path, workdir, max_sec=MAX_REF_SEC, denoise=True):
     return clean, text, full_clean
 
 
+_worker = {"proc": None}
+_worker_lock = None
+
+
+def _worker_generate(model, text, ref_wav, ref_text, out_dir, prefix,
+                     timeout_sec):
+    """상주 워커로 생성 (모델 1회 로드 — 테이크당 ~10초 절약, RTF 최적화).
+
+    실패/타임아웃 시 워커를 버리고 예외 → 호출부가 CLI 폴백.
+    """
+    import json
+    import threading
+    global _worker_lock
+    if _worker_lock is None:
+        _worker_lock = threading.Lock()
+    with _worker_lock:
+        p = _worker["proc"]
+        if p is None or p.poll() is not None:
+            p = subprocess.Popen(
+                [sys.executable, os.path.join(ROOT, "core", "tts_worker.py")],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True)
+            _worker["proc"] = p
+        req = {"model": model, "text": text, "ref_audio": ref_wav,
+               "ref_text": ref_text, "out_dir": out_dir, "prefix": prefix}
+        p.stdin.write(json.dumps(req) + "\n")
+        p.stdin.flush()
+        resp = {}
+
+        def read():
+            line = p.stdout.readline()
+            resp["line"] = line
+
+        t = threading.Thread(target=read, daemon=True)
+        t.start()
+        t.join(timeout_sec)
+        if t.is_alive() or not resp.get("line"):
+            p.kill()
+            _worker["proc"] = None
+            raise RuntimeError("워커 응답 없음 (타임아웃)")
+        r = json.loads(resp["line"])
+        if not r.get("ok"):
+            raise RuntimeError(r.get("error", "워커 생성 실패"))
+
+
 def synthesize(text, ref_wav, ref_text, output_path, fast=False, retries=1,
                timeout_sec=600):
     """참조 목소리로 대본을 읽은 wav 생성.
 
+    1순위: 상주 워커 (모델 로드 1회). 실패 시 CLI 서브프로세스 폴백 —
     저사양(GPU 없는) CI 러너에서 mlx_audio가 파일을 안 만들고 종료코드 0을
-    내거나 아예 멈추는 경우가 관찰됨 → 출력 파일 검증 + 타임아웃 + 재시도.
+    내거나 멈추는 경우가 관찰됨 → 출력 파일 검증 + 타임아웃 + 재시도.
     """
     model = MODEL_FAST if fast else MODEL_BEST
     out_dir = os.path.dirname(os.path.abspath(output_path)) or "."
     prefix = os.path.splitext(os.path.basename(output_path))[0]
+    try:
+        _worker_generate(model, text, ref_wav, ref_text, out_dir, prefix,
+                         timeout_sec)
+        if os.path.exists(output_path):
+            return output_path
+    except (RuntimeError, OSError, ValueError):
+        pass  # CLI 폴백
+
     cmd = [sys.executable, "-m", "mlx_audio.tts.generate",
            "--model", model, "--text", text,
            "--ref_audio", ref_wav, "--ref_text", ref_text,
@@ -208,16 +263,39 @@ def _notify(on_progress, **event):
             pass
 
 
+PARAGRAPH_SENTS = 6      # 문단 단위(파이프라인 재사용 단위)의 최대 문장 수
+PARA_GAP = (0.8, 1.1)    # 문단 사이 호흡(초) — 문장(0.5~0.7)보다 김 (경계 위계)
+
+
+def split_paragraphs(text, max_sents=PARAGRAPH_SENTS):
+    """긴 원고를 문단 단위로 분할 (순수 함수). 빈 줄을 우선 존중하고,
+    문단이 max_sents를 넘으면 다시 나눈다.
+
+    문단(≤6문장, ≈15~40초)이 파이프라인의 재사용 단위 — 실측으로 검증된
+    최적 생성 크기(짧으면 전달력 붕괴, 35초+ 통짜는 선별 약화)다.
+    """
+    from .prosody import split_sentences
+    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
+    if not blocks:
+        blocks = [text.strip()]
+    paras = []
+    for b in blocks:
+        sents = split_sentences(b.replace("\n", " "))
+        for i in range(0, len(sents), max_sents):
+            paras.append(" ".join(sents[i:i + max_sents]))
+    return [p for p in paras if p]
+
+
 def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
                     fast=False, takes=DEFAULT_TAKES, on_progress=None):
-    """best-of-N 테이크: 여러 번 생성해 선별 점수(PNS − 속도 이탈) 최고를 채택.
+    """best-of-N 테이크 + 문장 조합. 긴 원고는 문단 단위로 파이프라인 재사용.
 
     생성은 확률적이라 테이크 편차가 크다 (실측: 같은 설정으로 50~84점).
     사람 성우가 여러 테이크를 녹음해 고르듯, 북극성 지표로 자동 선별한다.
     운율 의존성이 없으면 단일 테이크 폴백.
     """
     from .audio import normalize_speech_level
-    from .prosody import prosody_deps_available
+    from .prosody import prosody_deps_available, split_sentences
     if takes <= 1 or not prosody_deps_available():
         _notify(on_progress, stage="take", i=1, n=1)
         out = synthesize(text, ref_wav, ref_text, output_path, fast=fast)
@@ -229,58 +307,140 @@ def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
         _notify(on_progress, stage="done")
         return out, None
 
-    from .prosody import (cliff_score, ending_cliff, ending_style_score,
-                          ending_word_drops, evaluate_prosody, final_f0_slopes,
-                          prosody_features, reshape_energy_contour,
-                          stress_features, stress_style_score,
-                          swallowed_score, swallowed_word_worst,
-                          word_drop_score)
-    natural_rate = prosody_features(natural_wav)["artic_rate"]
-    natural_slopes = final_f0_slopes(natural_wav)
-    natural_stress = stress_features(natural_wav)
-    natural_cliff = ending_cliff(natural_wav)
-    scored = []
+    # 자연 운율 컨텍스트는 원고 전체에서 1회만 계산 (문단들이 공유)
+    from .prosody import (ending_metrics, prosody_features, stress_features)
+    natural_feats = prosody_features(natural_wav)
+    natural_slopes, natural_cliff = ending_metrics(natural_wav)
+    ctx = {"feats": natural_feats, "rate": natural_feats["artic_rate"],
+           "slopes": natural_slopes, "stress": stress_features(natural_wav),
+           "cliff": natural_cliff, "wav": natural_wav}
+
+    paras = split_paragraphs(text)
+    if len(paras) <= 1:
+        pns = _generate_unit(text, ref_wav, ref_text, ctx, output_path,
+                             fast=fast, takes=takes, on_progress=on_progress)
+        normalize_speech_level(output_path)
+        _notify(on_progress, stage="done", pns=round(pns, 1))
+        return output_path, pns
+
+    # 문단 배치: 각 문단이 동일 파이프라인(테이크→선별→조합)을 재사용
+    import numpy as np
+    import soundfile as sf
+    rng = np.random.default_rng(len(text))
+    pieces, sr_out, pns_list = [], 24_000, []
     with tempfile.TemporaryDirectory() as wd:
+        for pi, para in enumerate(paras):
+            _notify(on_progress, stage="paragraph", i=pi + 1, n=len(paras))
+            part = os.path.join(wd, f"para_{pi}.wav")
+            pns = _generate_unit(para, ref_wav, ref_text, ctx, part,
+                                 fast=fast, takes=takes,
+                                 on_progress=on_progress)
+            pns_list.append(pns)
+            y, sr_out = sf.read(part, dtype="float32")
+            if y.ndim > 1:
+                y = y.mean(axis=1)
+            pieces.append(y)
+        joined = [pieces[0]]
+        for y in pieces[1:]:
+            gap = float(rng.uniform(*PARA_GAP))
+            joined += [np.zeros(int(sr_out * gap), dtype="float32"), y]
+        sf.write(output_path, np.concatenate(joined), sr_out)
+    normalize_speech_level(output_path)
+    avg = float(np.mean(pns_list))
+    _notify(on_progress, stage="done", pns=round(avg, 1))
+    return output_path, avg
+
+
+def _generate_unit(text, ref_wav, ref_text, ctx, output_path,
+                   fast=False, takes=DEFAULT_TAKES, on_progress=None):
+    """한 문단(재사용 단위)의 테이크 생성→채점→선별→문장 조합.
+
+    최적화: 생성(GPU, 상주 워커)과 채점(CPU: Whisper·pyin·UTMOS)을
+    스레드로 오버랩 — 테이크 i를 채점하는 동안 테이크 i+1을 생성.
+    채점 자체도 중복 제거: 문장 채점 1패스에서 어미낙하·먹힌단어를 파생.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from .prosody import (cliff_score, ending_metrics, ending_style_score,
+                          evaluate_prosody, reshape_energy_contour,
+                          stress_features, stress_style_score,
+                          swallowed_score, take_sentence_scores,
+                          word_drop_score)
+
+    def score_take(take):
+        sent_scores = take_sentence_scores(take, text)
+        if sent_scores:
+            wdrop = word_drop_score([s["drop"] for s in sent_scores])
+            swallow = swallowed_score(min(s["swallow"] for s in sent_scores))
+            gaps = [s["boundary_gap"] for s in sent_scores
+                    if "boundary_gap" in s]
+            from .prosody import boundary_pause_adequacy
+            bpa = boundary_pause_adequacy(gaps) if gaps else None
+        else:
+            wdrop = swallow = 1.0
+            bpa = None
+        r = evaluate_prosody(ctx["wav"], take, script=text,
+                             ref_feats=ctx["feats"], bpa=bpa)
+        slopes, cliff_v = ending_metrics(take)
+        ending = ending_style_score(slopes, ctx["slopes"])
+        stress = stress_style_score(stress_features(take), ctx["stress"])
+        cliff = cliff_score(cliff_v, ctx["cliff"])
+        sel = (_selection_score(r["pns"], r["gen"]["artic_rate"], ctx["rate"])
+               - ENDING_PENALTY * (1.0 - ending)
+               - STRESS_PENALTY * (1.0 - stress)
+               - CLIFF_PENALTY * (1.0 - cliff)
+               - WORD_DROP_PENALTY * (1.0 - wdrop)
+               - SWALLOW_PENALTY * (1.0 - swallow))
+        return {"path": take, "pns": r["pns"], "sel": sel,
+                "sent_scores": sent_scores,
+                "detail": {"ending": ending, "stress": stress, "cliff": cliff,
+                           "wdrop": wdrop, "swallow": swallow,
+                           "rate": r["gen"]["artic_rate"]}}
+
+    scored = []
+    with tempfile.TemporaryDirectory() as wd, \
+            ThreadPoolExecutor(max_workers=1) as pool:
+        pending = None  # (future, index)
+        stop = False
         for i in range(takes):
             take = os.path.join(wd, f"take_{i}.wav")
             _notify(on_progress, stage="take", i=i + 1, n=takes)
             synthesize(text, ref_wav, ref_text, take, fast=fast)
-            ensure_breath_pauses(take, text)  # 문장 경계 호흡 보장
-            reshape_energy_contour(take, take)  # 강세 구조 재조형 후 채점
-            r = evaluate_prosody(natural_wav, take, script=text)
-            ending = ending_style_score(final_f0_slopes(take), natural_slopes)
-            stress = stress_style_score(stress_features(take), natural_stress)
-            cliff = cliff_score(ending_cliff(take), natural_cliff)
-            wdrop = word_drop_score(ending_word_drops(take, text))
-            swallow = swallowed_score(swallowed_word_worst(take))
-            sel = (_selection_score(r["pns"], r["gen"]["artic_rate"],
-                                    natural_rate)
-                   - ENDING_PENALTY * (1.0 - ending)
-                   - STRESS_PENALTY * (1.0 - stress)
-                   - CLIFF_PENALTY * (1.0 - cliff)
-                   - WORD_DROP_PENALTY * (1.0 - wdrop)
-                   - SWALLOW_PENALTY * (1.0 - swallow))
-            scored.append({"path": take, "pns": r["pns"], "sel": sel})
-            _notify(on_progress, stage="take_scored", i=i + 1, n=takes,
-                    pns=round(r["pns"], 1), sel=round(sel, 1),
-                    ending=round(ending, 2), stress=round(stress, 2),
-                    cliff=round(cliff, 2), wdrop=round(wdrop, 2),
-                    swallow=round(swallow, 2),
-                    rate=round(r["gen"]["artic_rate"], 1),
-                    best=bool(pick_best_take(scored) == len(scored) - 1))
-            if sel >= PNS_TARGET:
+            ensure_breath_pauses(take, text)
+            reshape_energy_contour(take, take)
+            if pending is not None:  # 이전 테이크 채점 회수 (오버랩)
+                res, idx = pending[0].result(), pending[1]
+                scored.append(res)
+                d = res["detail"]
+                _notify(on_progress, stage="take_scored", i=idx + 1, n=takes,
+                        pns=round(res["pns"], 1), sel=round(res["sel"], 1),
+                        ending=round(d["ending"], 2),
+                        stress=round(d["stress"], 2),
+                        cliff=round(d["cliff"], 2),
+                        wdrop=round(d["wdrop"], 2),
+                        swallow=round(d["swallow"], 2),
+                        rate=round(d["rate"], 1),
+                        best=bool(pick_best_take(scored) == len(scored) - 1))
+                if res["sel"] >= PNS_TARGET:
+                    stop = True
+            pending = (pool.submit(score_take, take), i)
+            if stop:
                 break
+        if pending is not None:
+            res, idx = pending[0].result(), pending[1]
+            scored.append(res)
+            d = res["detail"]
+            _notify(on_progress, stage="take_scored", i=idx + 1, n=takes,
+                    pns=round(res["pns"], 1), sel=round(res["sel"], 1),
+                    ending=round(d["ending"], 2), stress=round(d["stress"], 2),
+                    cliff=round(d["cliff"], 2), wdrop=round(d["wdrop"], 2),
+                    swallow=round(d["swallow"], 2), rate=round(d["rate"], 1),
+                    best=bool(pick_best_take(scored) == len(scored) - 1))
         best = scored[pick_best_take(scored)]
-        # 문장 단위 베스트 조합: 테이크별로 잘 나온 문장이 다르므로,
-        # 문장마다 최고 테이크 구간을 골라 호흡으로 잇는다 (통짜 생성 유지 —
-        # 조합만 문장 단위. 이음새는 우리가 넣는 무음이라 안전).
         composed = _compose_best_sentences(scored, text, output_path,
                                            on_progress=on_progress)
         if not composed:
             os.replace(best["path"], output_path)
-    normalize_speech_level(output_path)  # 배포 기준 음량으로 (정적 게인)
-    _notify(on_progress, stage="done", pns=round(best["pns"], 1))
-    return output_path, best["pns"]
+    return best["pns"]
 
 
 def _compose_best_sentences(scored, text, output_path, on_progress=None):
@@ -297,7 +457,7 @@ def _compose_best_sentences(scored, text, output_path, on_progress=None):
         return False
     per_take = []
     for t in scored:
-        s = take_sentence_scores(t["path"], text)
+        s = t.get("sent_scores") or take_sentence_scores(t["path"], text)
         if s is None:
             return False
         per_take.append(s)

@@ -213,19 +213,29 @@ def prosody_naturalness_score(utmos_val, match):
                     + 0.2 * match["pause"] + 0.2 * match["rhythm"])
 
 
-def evaluate_prosody(ref_wav, gen_wav, script=None):
+def ending_metrics(wav_path):
+    """(끝음 기울기 목록, 절벽) 을 pyin 1회로 함께 계산 — RTF 최적화."""
+    return final_f0_slopes(wav_path), ending_cliff(wav_path)
+
+
+def evaluate_prosody(ref_wav, gen_wav, script=None, ref_feats=None, bpa=None):
     """참조(자연 발화) 대비 생성물의 운율 자연스러움 종합 → dict.
 
     script를 주면 문장 경계 호흡(BPA)을 측정해 휴지 항에 반영한다:
     휴지 항 = 0.5 × 전역 휴지 일치 + 0.5 × BPA. ("문장을 붙여 읽는" 결함은
     전역 통계로는 안 잡히고 경계 위치 측정으로만 잡힌다 — 실측 검증.)
+    ref_feats/bpa를 주면 해당 재계산을 생략한다 (테이크 루프 최적화 —
+    BPA는 문장 채점 패스에서 파생 가능해 Whisper 1회가 절약된다).
     """
-    ref_feats = prosody_features(ref_wav)
+    if ref_feats is None:
+        ref_feats = prosody_features(ref_wav)
     gen_feats = prosody_features(gen_wav)
     match = prosody_match_scores(gen_feats, ref_feats)
     bpa = None
     if script and len(split_sentences(script)) >= 2:
-        bpa = boundary_pause_adequacy(sentence_boundary_gaps(gen_wav, script))
+        if bpa is None:
+            bpa = boundary_pause_adequacy(
+                sentence_boundary_gaps(gen_wav, script))
         match["pause"] = 0.5 * match["pause"] + 0.5 * bpa
     u = utmos(gen_wav)
     return {"pns": prosody_naturalness_score(u, match), "utmos": u, "bpa": bpa,
@@ -593,6 +603,11 @@ def sentence_boundary_info(wav_path, script, units=None):
     return infos
 
 
+WHISPER_SCORING = "mlx-community/whisper-base-mlx"  # 채점용 경량 모델
+# (정렬·타임스탬프만 필요 — large와 단어 정렬 동등, 더 빠름을 실측 검증.
+#  참조 받아쓰기·CER은 정확도가 중요해 large-turbo 유지)
+
+
 def take_sentence_scores(wav_path, script):
     """테이크의 문장별 품질 채점 → [{span:(s,e), score, ...}] (문장 조합용).
 
@@ -602,7 +617,6 @@ def take_sentence_scores(wav_path, script):
     """
     import librosa
     import mlx_whisper
-    from .clone import WHISPER
 
     sents = split_sentences(script)
     y, sr = librosa.load(wav_path, sr=_SR, mono=True)
@@ -614,7 +628,7 @@ def take_sentence_scores(wav_path, script):
     if v.sum() > 10:
         st[v] = 12 * np.log2(f0[v] / np.nanmedian(f0[v]))
 
-    r = mlx_whisper.transcribe(wav_path, path_or_hf_repo=WHISPER,
+    r = mlx_whisper.transcribe(wav_path, path_or_hf_repo=WHISPER_SCORING,
                                language="ko", word_timestamps=True)
     words = [w for seg in r["segments"] for w in seg["words"]]
     if not words:
@@ -683,6 +697,18 @@ def take_sentence_scores(wav_path, script):
                  + swallowed_score(swallow)) / 2
         out.append({"span": (t0, t1), "score": float(score),
                     "drop": drop, "swallow": swallow})
+
+    # 문장 사이 경계 휴지(에너지 무음 기준)도 함께 파생 — BPA용
+    # (별도 Whisper 패스를 없애는 RTF 최적화)
+    silence_runs = _silence_runs(wav_path)
+    for i in range(len(out) - 1):
+        lo = out[i]["span"][1] - 0.1
+        hi = out[i + 1]["span"][0] + 0.1
+        best = 0.0
+        for s, e in silence_runs:
+            if s < hi and e > lo:
+                best = max(best, e - s)
+        out[i]["boundary_gap"] = float(best)
     return out
 
 

@@ -28,7 +28,7 @@ WORK = os.path.join(tempfile.gettempdir(), "denoise-app-work")
 os.makedirs(WORK, exist_ok=True)
 
 MEDIA_EXTS = {".mov", ".mp4", ".m4v", ".mkv", ".wav", ".m4a", ".mp3", ".aac"}
-MAX_TEXT_LEN = 2000
+MAX_TEXT_LEN = 20000  # 장문 원고 지원 (문단 배치 파이프라인 — 약 40분 분량)
 
 app = Flask(__name__)
 

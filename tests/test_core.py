@@ -322,6 +322,27 @@ def test_stress_style_vacuous_when_no_data():
                                      "peak_valley": 17.0}) == 1.0
 
 
+# ---- 문단 분할 (장문 파이프라인 단위) ----
+
+def test_split_paragraphs_respects_blank_lines():
+    from core.clone import split_paragraphs
+    text = "첫 문단입니다. 둘째 문장.\n\n둘째 문단입니다."
+    assert split_paragraphs(text) == ["첫 문단입니다. 둘째 문장.", "둘째 문단입니다."]
+
+
+def test_split_paragraphs_caps_sentence_count():
+    from core.clone import split_paragraphs
+    text = " ".join(f"문장 {i}번입니다." for i in range(1, 15))
+    paras = split_paragraphs(text, max_sents=6)
+    assert len(paras) == 3  # 6 + 6 + 2
+    assert paras[0].count("입니다") == 6
+
+
+def test_split_paragraphs_short_text_single_unit():
+    from core.clone import split_paragraphs
+    assert len(split_paragraphs("한 문장입니다. 두 문장입니다.")) == 1
+
+
 # ---- 게이트 판정 ----
 
 def test_gates_pass():

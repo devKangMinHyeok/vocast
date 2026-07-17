@@ -222,6 +222,7 @@ def start_clone_job(text, fast, ref_path=None, profile_id=None,
         jdir = os.path.join(HISTORY_DIR, job_id)
         os.makedirs(jdir, exist_ok=True)
         out = os.path.join(jdir, "output.wav")
+        t_start = time.time()
         try:
             takes = 1 if fast else DEFAULT_TAKES
             if profile_id:
@@ -237,8 +238,17 @@ def start_clone_job(text, fast, ref_path=None, profile_id=None,
                             on_progress=on_progress)
             picked = max(job["takes"], key=lambda t: t.get("sel", -1e9),
                          default=None)
+            elapsed = time.time() - t_start
+            rtf = None
+            try:  # 처리량 북극성: RTF = 처리 시간 / 오디오 길이
+                import soundfile as sf
+                info = sf.info(out)
+                rtf = round(elapsed / max(info.duration, 0.1), 1)
+            except Exception:
+                pass
             job.update({"status": "done", "stage": "done",
-                        "pns": picked.get("pns") if picked else None})
+                        "pns": picked.get("pns") if picked else None,
+                        "elapsed_sec": round(elapsed), "rtf": rtf})
         except Exception as e:  # 실패도 세션에 기록
             job.update({"status": "error", "error": str(e)[-300:]})
         finally:
