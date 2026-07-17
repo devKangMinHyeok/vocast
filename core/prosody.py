@@ -365,6 +365,67 @@ def reshape_energy_contour(in_wav, out_wav, beta=1.3, gamma=0.7,
     return out_wav
 
 
+NATURAL_CLIFF = -9.0  # 자연 발화의 끝음 최대 하강 상한 (st/s, 실측 -7.8 기반)
+
+
+def ending_cliff(wav_path):
+    """발화 끝 0.35초의 '절벽 가파름' — 120ms 창 최대 하강 속도(st/s)의 중앙값.
+
+    "끝음을 확 내려꽂아 기계 같다" 피드백의 정량화. 실측: 사람 -7.8 vs
+    클론 -14~-17. 문헌: 자연스러운 종결 하강은 점진적(급락은 합성 결함).
+    """
+    import librosa
+    y, sr = librosa.load(wav_path, sr=_SR, mono=True)
+    y, _ = librosa.effects.trim(y, top_db=35)
+    f0 = librosa.pyin(y, fmin=_PYIN_FMIN, fmax=_PYIN_FMAX, sr=sr,
+                      frame_length=1024)[0]
+    hop_t = 512 / sr
+    st = np.full(len(f0), np.nan)
+    v = ~np.isnan(f0)
+    if v.sum() > 10:
+        st[v] = 12 * np.log2(f0[v] / np.nanmedian(f0[v]))
+    hop = int(sr * 0.03)
+    nf = len(y) // hop
+    db = 20 * np.log10(np.maximum(
+        np.sqrt((y[: nf * hop].reshape(nf, hop) ** 2).mean(axis=1)), 1e-9))
+    silent = db < np.percentile(db, 90) - PAUSE_DROP_DB
+    ends, run = [], 0
+    min_run = int(0.25 / 0.03)
+    for i, s in enumerate(np.append(silent, True)):
+        run = run + 1 if s else 0
+        if run == min_run and i * 0.03 > 1.0:
+            ends.append((i - run + 1) * 0.03)
+    falls = []
+    w = int(0.12 / hop_t)
+    for t_end in ends:
+        i1 = int(t_end / hop_t)
+        seg = st[max(0, i1 - int(0.35 / hop_t)): i1]
+        rates = []
+        for k in range(0, len(seg) - w):
+            win = seg[k: k + w]
+            idx = np.where(~np.isnan(win))[0]
+            if len(idx) >= 3:
+                rates.append(np.polyfit(idx * hop_t, win[idx], 1)[0])
+        if rates:
+            falls.append(min(rates))
+    return float(np.median(falls)) if falls else None
+
+
+def cliff_score(gen_cliff, ref_cliff, slack=1.4, floor=3.0):
+    """끝음 절벽 점수 (0~1): 목표보다 slack배 이상 가파르면 감점. 순수 함수.
+
+    목표 = max(참조 절벽, NATURAL_CLIFF) — 참조가 낭독투로 이미 가파르면
+    자연 상한(-9)을 기준으로 삼는다 (가이드 문장 낭독 프로필 오염 대비)."""
+    if gen_cliff is None:
+        return 1.0
+    target = max(float(ref_cliff) if ref_cliff is not None else NATURAL_CLIFF,
+                 NATURAL_CLIFF)
+    ratio = gen_cliff / target  # 둘 다 음수 → 비율 >1 이면 더 가파름
+    if ratio <= slack:
+        return 1.0
+    return float(np.clip(1.0 - (ratio - slack) / floor, 0.0, 1.0))
+
+
 def ending_style_score(gen_slopes, ref_slopes, tolerance=2.0, floor=8.0):
     """끝음 스타일 일치도 (0~1): 끝음 기울기 중앙값의 화자 대비 차이.
 

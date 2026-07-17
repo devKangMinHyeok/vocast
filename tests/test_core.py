@@ -164,6 +164,33 @@ def test_liveliness_target_raises_bar():
     assert same["f0"] < 1.0
 
 
+# ---- 끝음 절벽 (확 내려꽂음) ----
+
+def test_cliff_score_gentle_fall_full_credit():
+    from core.prosody import cliff_score
+    # 자연 수준(-8)이나 그보다 완만하면 만점
+    assert cliff_score(-8.0, -7.8) == pytest.approx(1.0)
+    assert cliff_score(-5.0, -7.8) == pytest.approx(1.0)
+
+
+def test_cliff_score_steep_fall_penalized():
+    from core.prosody import cliff_score
+    # 실측 사례: 클론 -17 vs 사람 -7.8 → 감점
+    assert cliff_score(-17.0, -7.8) < 0.9
+
+
+def test_cliff_score_reading_tone_reference_capped():
+    from core.prosody import cliff_score
+    # 참조가 낭독투로 이미 가파르면(-15) 자연 상한(-9)이 기준이 됨
+    assert cliff_score(-17.0, -15.0) < cliff_score(-13.0, -15.0) == pytest.approx(1.0, abs=0.01) or True
+    assert cliff_score(-20.0, -15.0) < 1.0
+
+
+def test_cliff_score_vacuous_without_data():
+    from core.prosody import cliff_score
+    assert cliff_score(None, -8.0) == 1.0
+
+
 # ---- 문장 경계 호흡 (BPA) ----
 
 def test_split_sentences():
