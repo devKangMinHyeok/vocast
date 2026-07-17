@@ -153,7 +153,29 @@
       <output id="dnBoostVal">0 dB</output>
     </div>
     <button class="go" id="dnGo" disabled>노이즈 제거하기</button>
-    <div class="status" id="dnStatus"></div>
+
+    <div id="dnJobPanel" style="display:none">
+      <div class="stages">
+        <div class="stage" id="dstg0">1. 오디오 추출</div>
+        <div class="stage" id="dstg1">2. 노이즈 제거</div>
+        <div class="stage" id="dstg2">3. 말끝 보호 블렌딩</div>
+        <div class="stage" id="dstg3">✓ 완성</div>
+      </div>
+      <div class="status" id="dnStatus"></div>
+      <div class="stats" id="dnReport" style="display:none"></div>
+      <div class="rec-controls" id="dnABRow" style="display:none">
+        <button id="abOrigBtn">🔈 원본</button>
+        <button id="abCleanBtn" class="recording">✨ 제거 후</button>
+      </div>
+      <audio id="dnAudio" controls style="display:none"></audio>
+      <a class="go secondary" id="dnDownload" style="display:none; text-align:center; text-decoration:none">⬇ 결과 파일 저장</a>
+    </div>
+
+    <div class="card" id="dnHistoryCard" style="display:none">
+      <h3>📚 작업 라이브러리</h3>
+      <p class="muted">같은 위치에서 원본↔제거 후를 번갈아 들으며 효과를 확인해 보세요.</p>
+      <div id="dnHistoryList"></div>
+    </div>
   </section>
 
   <!-- ===== 보이스 클로닝 ===== -->
@@ -293,27 +315,166 @@ function wireDrop(dropId, fileId, labelId, defaultLabel, onPick) {
   drop.addEventListener('drop', ev => set(ev.dataTransfer.files[0]));
 }
 function setStatus(el, html, cls = '') { el.className = 'status ' + cls; el.innerHTML = html; }
+const esc = s => (s ?? '').toString().replace(/[&<>"']/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtSec = s => s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초`;
 
-// ---- 노이즈 제거 (기존) ----
-let dnPicked = null;
+// ---- 노이즈 제거 (비동기 잡 + A/B 비교 + 품질 리포트 + 라이브러리) ----
+let dnPicked = null, dnPollTimer = null;
 wireDrop('dnDrop', 'dnFile', 'dnLabel', '파일을 끌어다 놓거나 클릭해서 선택',
-  f => { dnPicked = f; $('dnGo').disabled = !f; });
+  f => {
+    dnPicked = f; $('dnGo').disabled = !f;
+    if (f) $('dnLabel').textContent = `${f.name} (${(f.size / 1e6).toFixed(1)}MB)`;
+  });
 $('dnBoost').addEventListener('input', () => $('dnBoostVal').textContent = $('dnBoost').value + ' dB');
+
+function abSwitch(audio, url, origBtn, cleanBtn, isClean) {
+  if (!audio.src.endsWith(url)) {
+    const t = audio.currentTime, playing = !audio.paused;
+    audio.src = url;
+    audio.preload = 'auto';
+    audio.onloadedmetadata = () => {
+      audio.currentTime = Math.min(t, audio.duration || t);
+      if (playing) audio.play();
+      audio.onloadedmetadata = null;
+    };
+    audio.load();  // preload=none이어도 즉시 메타데이터를 불러오게
+  }
+  origBtn.classList.toggle('recording', !isClean);
+  cleanBtn.classList.toggle('recording', isClean);
+}
+
+function setDnStages(n) {
+  for (let i = 0; i < 4; i++) {
+    const el = $('dstg' + i);
+    el.className = 'stage' + (i < n ? ' done' : i === n ? ' on' : '');
+  }
+}
+const DN_STAGE_IDX = { extract: 0, denoise: 1, blend: 2, remux: 2, preview: 2, report: 2 };
+const DN_STAGE_MSG = {
+  extract: '영상에서 오디오를 추출하는 중…',
+  denoise: 'AI가 노이즈를 제거하는 중 (보호 패스 + 풀억제 패스)…',
+  blend: '말끝을 보호하며 두 패스를 합치는 중…',
+  remux: '영상과 새 오디오를 재결합하는 중…',
+  preview: '미리듣기를 준비하는 중…',
+  report: '품질을 실측하는 중…' };
+
+function renderDnReport(el, r, job) {
+  const okLoss = r.speech_loss_pct <= 1;
+  const speed = job.duration && job.elapsed_sec ? (job.duration / job.elapsed_sec).toFixed(1) : null;
+  el.style.display = 'grid';
+  el.innerHTML = `
+    <div class="stat"><b style="color:${okLoss ? 'var(--ok)' : 'var(--err)'}">${r.speech_loss_pct}%</b><span>발화 손실 ${okLoss ? '✓ 말끝 보존' : '⚠︎'}</span></div>
+    <div class="stat"><b>-${r.pause_supp_db}dB</b><span>무음 소음 억제</span></div>
+    <div class="stat"><b>${speed ? speed + '×' : (job.elapsed_sec ?? '-') + 's'}</b><span>실시간 대비 속도</span></div>`;
+}
+
 $('dnGo').onclick = async () => {
   $('dnGo').disabled = true;
-  setStatus($('dnStatus'), '<span class="spinner"></span>처리 중…');
+  $('dnJobPanel').style.display = 'block';
+  $('dnReport').style.display = 'none'; $('dnABRow').style.display = 'none';
+  $('dnAudio').style.display = 'none'; $('dnDownload').style.display = 'none';
+  setDnStages(0);
+  setStatus($('dnStatus'), '<span class="spinner"></span>업로드 중…');
   const fd = new FormData();
   fd.append('file', dnPicked); fd.append('boost', $('dnBoost').value);
   try {
-    const res = await fetch('/api/denoise', { method: 'POST', body: fd });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '오류');
-    const blob = await res.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = 'clean_' + dnPicked.name; a.click();
-    setStatus($('dnStatus'), '✅ 완료! 다운로드 폴더를 확인하세요', 'ok');
-  } catch (e) { setStatus($('dnStatus'), '❌ ' + e.message, 'err'); }
-  finally { $('dnGo').disabled = false; }
+    const { job_id } = await api('/api/dnjobs', { method: 'POST', body: fd });
+    dnPoll(job_id);
+  } catch (e) {
+    setStatus($('dnStatus'), '❌ ' + e.message, 'err');
+    $('dnGo').disabled = !dnPicked;
+  }
 };
+
+function dnPoll(jid) {
+  clearInterval(dnPollTimer);
+  dnPollTimer = setInterval(async () => {
+    try {
+      const job = await api('/api/dnjobs/' + jid);
+      const elapsed = job.started_ts
+        ? ` (경과 ${fmtSec(Math.max(0, Math.round(Date.now() / 1000 - job.started_ts)))}${job.duration ? ' / 파일 ' + fmtSec(Math.round(job.duration)) : ''})` : '';
+      if (job.status === 'running') {
+        setDnStages(DN_STAGE_IDX[job.stage] ?? 0);
+        setStatus($('dnStatus'), `<span class="spinner"></span>${DN_STAGE_MSG[job.stage] || '처리 중…'}${elapsed}`);
+      } else if (job.status === 'done') {
+        clearInterval(dnPollTimer);
+        setDnStages(4); $('dstg3').classList.add('done');
+        setStatus($('dnStatus'), `✅ 완성! ${fmtSec(job.elapsed_sec)} 걸렸어요 — 아래에서 원본과 비교해 들어보세요`, 'ok');
+        if (job.report) renderDnReport($('dnReport'), job.report, job);
+        $('dnABRow').style.display = 'flex';
+        const audio = $('dnAudio');
+        audio.style.display = 'block';
+        audio.src = `/api/dnjobs/${jid}/audio/clean`;
+        $('abOrigBtn').onclick = () => abSwitch(audio, `/api/dnjobs/${jid}/audio/orig`, $('abOrigBtn'), $('abCleanBtn'), false);
+        $('abCleanBtn').onclick = () => abSwitch(audio, `/api/dnjobs/${jid}/audio/clean`, $('abOrigBtn'), $('abCleanBtn'), true);
+        $('abOrigBtn').classList.remove('recording'); $('abCleanBtn').classList.add('recording');
+        const dl = $('dnDownload');
+        dl.style.display = 'block'; dl.href = `/api/dnjobs/${jid}/file`; dl.download = job.out_name || '';
+        $('dnGo').disabled = !dnPicked;
+        loadDnHistory();
+      } else if (job.status === 'error') {
+        clearInterval(dnPollTimer);
+        setStatus($('dnStatus'), '❌ ' + (job.error || '실패'), 'err');
+        $('dnGo').disabled = !dnPicked;
+      }
+    } catch {}
+  }, 1200);
+}
+
+let DNLIB = {};
+function dnCard(j) {
+  const done = j.status === 'done';
+  const r = j.report || {};
+  const meta = [j.created, j.engine, j.boost ? `+${j.boost}dB` : '',
+    j.duration ? fmtSec(Math.round(j.duration)) : '', j.size_mb ? j.size_mb + 'MB' : '',
+    j.status === 'error' ? '❌ 실패' : (!done ? '⏳ 진행 중' : '')].filter(Boolean).join(' · ');
+  return `<div class="job-card">
+    <div class="job-head">
+      <div class="grow">
+        <div class="job-title">🧹 ${esc(j.title)}</div>
+        <div class="muted">${meta}</div>
+        ${done && r.speech_loss_pct != null ? `<div class="muted">발화 손실 ${r.speech_loss_pct}%${r.speech_loss_pct <= 1 ? ' ✓' : ' ⚠︎'} · 무음 억제 -${r.pause_supp_db}dB</div>` : ''}
+      </div>
+      <button class="icon-btn" title="삭제" onclick="deleteDnJob('${j.id}')">🗑</button>
+    </div>
+    ${done ? `<audio id="dnaud-${j.id}" controls preload="none" src="/api/dnjobs/${j.id}/audio/clean"></audio>
+    <div class="job-actions">
+      <button class="mini" id="dnab-o-${j.id}" onclick="dnCardAB('${j.id}', false)">🔈 원본</button>
+      <button class="mini" id="dnab-c-${j.id}" onclick="dnCardAB('${j.id}', true)" style="border-color:var(--accent)">✨ 제거 후</button>
+      <a class="mini" href="/api/dnjobs/${j.id}/file" download>⬇ 결과 저장</a>
+    </div>` : ''}
+  </div>`;
+}
+async function loadDnHistory() {
+  try {
+    const { items } = await api('/api/dnjobs');
+    if (!items.length) { $('dnHistoryCard').style.display = 'none'; return; }
+    DNLIB = {}; items.forEach(j => DNLIB[j.id] = j);
+    $('dnHistoryCard').style.display = 'block';
+    $('dnHistoryList').innerHTML = items.map(dnCard).join('');
+  } catch {}
+}
+window.dnCardAB = (id, clean) => {
+  const a = $('dnaud-' + id);
+  const o = $('dnab-o-' + id), c = $('dnab-c-' + id);
+  const url = `/api/dnjobs/${id}/audio/${clean ? 'clean' : 'orig'}`;
+  if (!a.src.endsWith(url)) {
+    const t = a.currentTime, playing = !a.paused;
+    a.src = url;
+    a.preload = 'auto';
+    a.onloadedmetadata = () => { a.currentTime = Math.min(t, a.duration || t); if (playing || t === 0) a.play(); a.onloadedmetadata = null; };
+    a.load();  // preload=none이어도 즉시 메타데이터를 불러오게
+  } else if (a.paused) a.play();
+  o.style.borderColor = clean ? '' : 'var(--accent)';
+  c.style.borderColor = clean ? 'var(--accent)' : '';
+};
+window.deleteDnJob = async id => {
+  if (!confirm('이 작업을 삭제할까요? 결과 파일도 함께 지워져요.')) return;
+  await api('/api/dnjobs/' + id, { method: 'DELETE' });
+  loadDnHistory();
+};
+loadDnHistory();
 
 // ---- 보이스 클로닝 (프로필 + 비동기 작업 + 시각화) ----
 let clPicked = null, pollTimer = null;
@@ -349,10 +510,6 @@ function setStages(n) { // 0~3 진행, -1 리셋
     el.className = 'stage' + (i < n ? ' done' : i === n ? ' on' : '');
   }
 }
-const esc = s => (s ?? '').toString().replace(/[&<>"']/g,
-  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const fmtSec = s => s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초`;
-
 function renderTakes(takes) {
   // 문단별로 최고 테이크 표시 (문단이 진행 단위)
   const byPara = {};

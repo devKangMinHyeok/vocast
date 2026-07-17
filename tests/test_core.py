@@ -475,6 +475,64 @@ def test_vad_threshold_too_few_frames():
     assert vad_threshold([-30.0] * 5) is None
 
 
+def test_report_from_frames_clean_result():
+    """발화 보존 + 무음만 억제된 결과 → 손실 0%, 억제량 양수."""
+    import numpy as np
+    from core.denoise import report_from_frames
+    rng = np.random.default_rng(0)
+    orig = np.concatenate([rng.normal(-25, 2, 500),    # 발화
+                           rng.normal(-50, 2, 500)])   # 무음(팬 소음)
+    out = orig.copy()
+    out[500:] -= 30                                     # 무음만 30dB 억제
+    r = report_from_frames(orig, out)
+    assert r["speech_loss_pct"] == 0.0
+    assert r["pause_supp_db"] > 20
+
+
+def test_report_from_frames_detects_speech_loss():
+    """발화 일부가 죽은 결과(과거 결함) → 손실 비율이 잡힌다."""
+    import numpy as np
+    from core.denoise import report_from_frames
+    rng = np.random.default_rng(1)
+    orig = np.concatenate([rng.normal(-25, 2, 500), rng.normal(-50, 2, 500)])
+    out = orig.copy()
+    out[100:200] -= 25                                  # 발화 20%를 게이트로 죽임
+    r = report_from_frames(orig, out)
+    assert r["speech_loss_pct"] >= 15
+
+
+def test_report_boost_invariant():
+    """볼륨 업(+10dB)이 손실/억제 지표를 왜곡하지 않는다."""
+    import numpy as np
+    from core.denoise import report_from_frames
+    rng = np.random.default_rng(2)
+    orig = np.concatenate([rng.normal(-25, 2, 500), rng.normal(-50, 2, 500)])
+    out = orig.copy(); out[500:] -= 30
+    r0 = report_from_frames(orig, out)
+    r1 = report_from_frames(orig, out + 10)
+    assert r0["speech_loss_pct"] == r1["speech_loss_pct"] == 0.0
+    assert abs(r0["pause_supp_db"] - r1["pause_supp_db"]) < 0.5
+
+
+def test_dnjob_store_roundtrip(tmp_path, monkeypatch):
+    import web.dnjobs as D
+    monkeypatch.setattr(D, "DN_DIR", str(tmp_path / "denoise"))
+    jdir = tmp_path / "denoise" / "dn1"
+    jdir.mkdir(parents=True)
+    (jdir / "meta.json").write_text(
+        '{"id": "dn1", "status": "done", "title": "t.mov", "out_name": "t_clean.mov"}',
+        encoding="utf-8")
+    (jdir / "clean.mov").write_bytes(b"x")
+    (jdir / "orig.m4a").write_bytes(b"x")
+    assert D.get_dnjob("dn1")["title"] == "t.mov"
+    assert D.dnjob_path("dn1", "file").endswith("clean.mov")
+    assert D.dnjob_path("dn1", "orig").endswith("orig.m4a")
+    assert D.dnjob_path("dn1", "clean") is None  # clean.m4a 없음
+    assert any(j["id"] == "dn1" for j in D.list_dnjobs())
+    D.delete_dnjob("dn1")
+    assert D.get_dnjob("dn1") is None
+
+
 # ---- 웹 서버 (기능 감지 포함) ----
 
 def test_health_endpoint():

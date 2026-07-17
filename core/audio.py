@@ -24,6 +24,24 @@ def run_ffmpeg(args):
         raise RuntimeError(f"ffmpeg 실패: {proc.stderr[-400:]}")
 
 
+def media_duration(path):
+    """미디어 길이(초). 실패 시 None."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", path], capture_output=True, text=True)
+    try:
+        return float(out.stdout.strip())
+    except ValueError:
+        return None
+
+
+def make_audio_preview(src, out_m4a, bitrate="96k"):
+    """미리듣기용 모노 AAC 추출 — A/B 비교 플레이어가 스트리밍하기 좋게."""
+    run_ffmpeg(["-i", src, "-vn", "-ac", "1", "-c:a", "aac",
+                "-b:a", bitrate, out_m4a])
+    return out_m4a
+
+
 def audio_codec_args(out_ext):
     """출력 확장자에 맞는 오디오 코덱 인자."""
     if out_ext == ".wav":

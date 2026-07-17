@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 from core.audio import default_output_ext, ensure_ffmpeg  # noqa: E402
 from core.clone import clone_available, clone_voice  # noqa: E402
 from core.denoise import run_denoise  # noqa: E402
-from web import profiles  # noqa: E402
+from web import dnjobs, profiles  # noqa: E402
 
 WORK = os.path.join(tempfile.gettempdir(), "denoise-app-work")
 os.makedirs(WORK, exist_ok=True)
@@ -111,6 +111,61 @@ def clone_api():
         os.remove(ref_path)
     return send_file(out_path, as_attachment=True,
                      download_name=f"{name}_클론낭독.wav")
+
+
+# ---- 노이즈 제거 (비동기 작업 + A/B 미리듣기 + 품질 리포트) ----
+
+@app.post("/api/dnjobs")
+def dnjobs_create_api():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify(error="파일이 없습니다"), 400
+    ext = os.path.splitext(f.filename)[1].lower()
+    if ext not in MEDIA_EXTS:
+        return jsonify(error=f"지원하지 않는 형식입니다: {ext}"), 400
+    try:
+        boost = float(request.form.get("boost") or 0)
+    except ValueError:
+        boost = 0.0
+    return jsonify(job_id=dnjobs.start_denoise_job(f, boost=boost))
+
+
+@app.get("/api/dnjobs")
+def dnjobs_list_api():
+    return jsonify(items=dnjobs.list_dnjobs())
+
+
+@app.get("/api/dnjobs/<jid>")
+def dnjobs_get_api(jid):
+    job = dnjobs.get_dnjob(jid)
+    if not job:
+        return jsonify(error="작업을 찾을 수 없습니다"), 404
+    return jsonify(job)
+
+
+@app.get("/api/dnjobs/<jid>/audio/<kind>")
+def dnjobs_audio_api(jid, kind):
+    if kind not in ("orig", "clean"):
+        return jsonify(error="orig 또는 clean"), 400
+    p = dnjobs.dnjob_path(jid, kind)
+    if not p:
+        return jsonify(error="미리듣기가 없습니다"), 404
+    return send_file(p, mimetype="audio/mp4", conditional=True)
+
+
+@app.get("/api/dnjobs/<jid>/file")
+def dnjobs_file_api(jid):
+    p = dnjobs.dnjob_path(jid, "file")
+    job = dnjobs.get_dnjob(jid)
+    if not p or not job:
+        return jsonify(error="결과 파일이 없습니다"), 404
+    return send_file(p, as_attachment=True, download_name=job["out_name"])
+
+
+@app.delete("/api/dnjobs/<jid>")
+def dnjobs_delete_api(jid):
+    dnjobs.delete_dnjob(jid)
+    return jsonify(ok=True)
 
 
 # ---- 가이드 녹음 / 보이스 프로필 ----

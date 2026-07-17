@@ -153,7 +153,16 @@ def blend_hybrid(protected, full, sr, pause_gain_db=-25, hop_sec=0.03,
     return a * m + b * (1 - m) * g
 
 
-def _denoise_wav_dfn(in_wav, out_wav):
+def _notify(on_progress, **event):
+    """진행 콜백 (선택) — 앱 계층 시각화용. 실패해도 파이프라인은 계속."""
+    if on_progress:
+        try:
+            on_progress(event)
+        except Exception:
+            pass
+
+
+def _denoise_wav_dfn(in_wav, out_wav, on_progress=None):
     """DFN 하이브리드로 wav 처리 (전용 venv 워커 호출 후 블렌딩)."""
     import numpy as np
     import soundfile as sf
@@ -162,20 +171,24 @@ def _denoise_wav_dfn(in_wav, out_wav):
     with tempfile.TemporaryDirectory() as wd:
         lim = os.path.join(wd, "lim.wav")
         unlim = os.path.join(wd, "unlim.wav")
+        _notify(on_progress, stage="denoise")
         proc = subprocess.run([DFN_VENV_PY, worker, in_wav, lim, unlim],
                               capture_output=True, text=True, timeout=1800)
         if proc.returncode != 0:
             raise RuntimeError(f"DFN 워커 실패: {proc.stderr[-300:]}")
+        _notify(on_progress, stage="blend")
         a, sr = sf.read(lim, dtype="float32")
         b, _ = sf.read(unlim, dtype="float32")
         sf.write(out_wav, blend_hybrid(a, b, sr).astype(np.float32), sr)
     return out_wav
 
 
-def run_denoise(input_path, output_path, boost=0.0, engine="auto"):
+def run_denoise(input_path, output_path, boost=0.0, engine="auto",
+                on_progress=None):
     """원본은 건드리지 않고, 소음 제거된 새 파일을 만든다. 영상은 무손실 복사.
 
     engine: "auto"(DFN 설치 시 하이브리드, 아니면 rnnoise) | "dfn" | "rnnoise"
+    on_progress: 단계 이벤트 콜백 {"stage": extract|denoise|blend|remux}
     """
     if os.path.abspath(output_path) == os.path.abspath(input_path):
         raise ValueError("출력이 입력과 같은 파일입니다. 원본 보호를 위해 중단합니다.")
@@ -184,6 +197,7 @@ def run_denoise(input_path, output_path, boost=0.0, engine="auto"):
         raise RuntimeError("DFN 엔진이 설치되어 있지 않습니다: bash scripts/install_dfn.sh")
 
     if not use_dfn:
+        _notify(on_progress, stage="denoise")
         args = ["-i", input_path]
         if has_video_stream(input_path):
             args += ["-c:v", "copy"]
@@ -196,10 +210,12 @@ def run_denoise(input_path, output_path, boost=0.0, engine="auto"):
     import tempfile
     with tempfile.TemporaryDirectory() as wd:
         raw = os.path.join(wd, "in.wav")
+        _notify(on_progress, stage="extract")
         run_ffmpeg(["-i", input_path, "-ac", "1", "-c:a", "pcm_s16le", raw])
         clean = os.path.join(wd, "clean.wav")
-        _denoise_wav_dfn(raw, clean)
+        _denoise_wav_dfn(raw, clean, on_progress=on_progress)
         post = f"volume={boost}dB" if boost else "anull"
+        _notify(on_progress, stage="remux")
         if has_video_stream(input_path):  # 원본 영상 + 새 오디오 재결합
             run_ffmpeg(["-i", input_path, "-i", clean, "-map", "0:v", "-map",
                         "1:a", "-c:v", "copy", "-af", post,
@@ -209,3 +225,44 @@ def run_denoise(input_path, output_path, boost=0.0, engine="auto"):
             run_ffmpeg(["-i", clean, "-af", post,
                         *audio_codec_args(os.path.splitext(output_path)[1].lower()),
                         output_path])
+
+
+def report_from_frames(orig_db, out_db):
+    """원본/결과 프레임 dB → 품질 리포트 (순수 함수, 볼륨 업과 무관).
+
+    - speech_loss_pct: 발화 프레임 중 (전체 발화 감쇠 대비) 15dB+ 더 깎인
+      비율 — "말끝이 사라진다" 결함의 지표. 정상 0%.
+    - pause_supp_db: 무음이 발화보다 얼마나 더 눌렸는지(+) — 소음 억제량.
+    """
+    import numpy as np
+    L = min(len(orig_db), len(out_db))
+    da, db_ = np.asarray(orig_db[:L]), np.asarray(out_db[:L])
+    p90 = np.percentile(da, 90)
+    # 무음 = 발화 대역(-20dB) 아래로 2dB 여유 — 팬 소음 낀 실녹음의 바닥도
+    # 잡히도록 (p90-40은 SNR 20dB대 녹음에서 무음을 하나도 못 찾았다)
+    sp, pa = da > p90 - 20, da < p90 - 22
+    att = db_ - da
+    ref = float(np.median(att[sp])) if sp.any() else 0.0
+    loss = float((sp & (att - ref < -15)).sum() / max(sp.sum(), 1)) * 100
+    supp = ref - float(np.median(att[pa])) if pa.any() else 0.0
+    return {"speech_loss_pct": round(loss, 1),
+            "pause_supp_db": round(supp, 1)}
+
+
+def denoise_report(src_path, out_path, max_sec=600):
+    """원본 대비 결과 품질 실측 (UI 표시용) — 발화 보존·무음 억제."""
+    import soundfile as sf
+    import numpy as np
+    import tempfile
+    with tempfile.TemporaryDirectory() as wd:
+        frames = []
+        for p in (src_path, out_path):
+            w = os.path.join(wd, f"{len(frames)}.wav")
+            run_ffmpeg(["-i", p, "-t", str(max_sec), "-ac", "1",
+                        "-ar", "48000", "-c:a", "pcm_s16le", w])
+            y, sr = sf.read(w, dtype="float32")
+            hop = int(sr * 0.03)
+            nf = max(len(y) // hop, 1)
+            frames.append(20 * np.log10(np.maximum(np.sqrt(
+                (y[: nf * hop].reshape(nf, hop) ** 2).mean(axis=1)), 1e-9)))
+    return report_from_frames(frames[0], frames[1])
