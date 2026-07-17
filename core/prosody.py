@@ -368,8 +368,10 @@ def reshape_energy_contour(in_wav, out_wav, beta=1.3, gamma=0.7,
 def ending_style_score(gen_slopes, ref_slopes, tolerance=2.0, floor=8.0):
     """끝음 스타일 일치도 (0~1): 끝음 기울기 중앙값의 화자 대비 차이.
 
-    tolerance(st/s) 이내면 만점, floor 초과 이탈이면 0점. 순수 함수."""
-    if not gen_slopes or not ref_slopes:
+    tolerance(st/s) 이내면 만점, floor 초과 이탈이면 0점. 참조 표본이 3개
+    미만이면 통계를 신뢰할 수 없어 가드 무효화(1.0) — 실사용 사고: 빈약한
+    프로필 통계가 전 테이크를 0점 처리해 선별을 왜곡. 순수 함수."""
+    if len(gen_slopes or []) < 1 or len(ref_slopes or []) < 3:
         return 1.0
     diff = abs(float(np.median(gen_slopes)) - float(np.median(ref_slopes)))
     return float(np.clip(1.0 - max(0.0, diff - tolerance) / floor, 0.0, 1.0))

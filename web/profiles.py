@@ -89,8 +89,8 @@ def add_recording(pid, file_storage, idx):
     return meta
 
 
-def build_profile(pid):
-    """녹음 병합 → 참조 자산 생성·캐시 → 자연 발화 통계 분석 (동기, 수십 초)."""
+def build_profile(pid, denoise=True):
+    """녹음 병합 → (기본) 노이즈 제거 → 참조 자산 생성·캐시 → 통계 분석."""
     from core.audio import concat_to_wav
     from core.clone import prepare_reference
     from core.prosody import (final_f0_slopes, prosody_features,
@@ -104,7 +104,8 @@ def build_profile(pid):
         raise RuntimeError("녹음이 없습니다")
     merged = os.path.join(pdir, "merged.wav")
     concat_to_wav(files, merged)
-    ref_wav, ref_text, natural = prepare_reference(merged, pdir)
+    ref_wav, ref_text, natural = prepare_reference(merged, pdir,
+                                                   denoise=denoise)
 
     feats = prosody_features(natural)
     stress = stress_features(natural) or {}
@@ -112,6 +113,7 @@ def build_profile(pid):
     meta = _load_meta(pid)
     meta.update({
         "ready": True,
+        "denoised": bool(denoise),
         "ref_wav": os.path.basename(ref_wav),
         "ref_text": ref_text,
         "natural_wav": os.path.basename(natural),

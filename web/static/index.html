@@ -186,6 +186,10 @@
         <h3 id="wizTitle">프로필 이름</h3>
         <div id="wizNameStep">
           <input type="text" id="wizName" placeholder="예: 유튜브용 목소리" value="내 목소리">
+          <label class="chk"><input type="checkbox" id="wizDenoise" checked>
+            🧹 녹음에 노이즈 제거 적용 (권장 — 팬 소리·주변 소음을 걷어내 목소리 학습 품질이 좋아져요)</label>
+          <p class="muted" style="margin-top:10px">💡 조용한 곳에서, 마이크와 20~30cm 거리를 두고,
+          평소 영상 찍을 때의 톤으로 읽어주세요. 목소리 학습 품질이 곧 클로닝 품질입니다.</p>
           <button class="go" id="wizNameNext">시작하기</button>
         </div>
         <div id="wizRecStep" style="display:none">
@@ -518,8 +522,11 @@ $('nextBtn').onclick = async () => {
       fd.append('audio', blobs[i], `${i}.webm`); fd.append('idx', i);
       await api(`/api/profiles/${meta.id}/recordings`, { method: 'POST', body: fd });
     }
-    setStatus($('buildStatus'), '<span class="spinner"></span>목소리 분석 중… (노이즈 제거 → 최적 구간 선택 → 받아쓰기 → 억양·호흡·강세 분석, 약 1분)');
-    const built = await api(`/api/profiles/${meta.id}/build`, { method: 'POST' });
+    const useDenoise = $('wizDenoise').checked;
+    setStatus($('buildStatus'), `<span class="spinner"></span>목소리 분석 중… (${useDenoise ? '노이즈 제거 → ' : ''}최적 구간 선택 → 받아쓰기 → 억양·호흡·강세 분석, 약 1분)`);
+    const built = await api(`/api/profiles/${meta.id}/build`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ denoise: useDenoise ? '1' : '0' }) });
     const s = built.stats;
     $('wizStats').innerHTML = `
       <div class="stat"><b>${s.f0_std}st</b><span>억양 역동성</span></div>

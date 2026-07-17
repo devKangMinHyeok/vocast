@@ -143,8 +143,10 @@ def profiles_recording_api(pid):
 
 @app.post("/api/profiles/<pid>/build")
 def profiles_build_api(pid):
+    body = request.get_json(silent=True) or {}
+    denoise = str(body.get("denoise", request.form.get("denoise", "1"))) != "0"
     try:
-        return jsonify(profiles.build_profile(pid))
+        return jsonify(profiles.build_profile(pid, denoise=denoise))
     except (RuntimeError, FileNotFoundError) as e:
         return jsonify(error=str(e)), 400
 

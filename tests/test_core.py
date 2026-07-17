@@ -183,18 +183,34 @@ def test_selection_score_penalizes_fast_takes():
 def test_ending_style_match_full_credit():
     from core.prosody import ending_style_score
     # 화자(상승형 +2.0st/s)와 같은 스타일 → 만점
-    assert ending_style_score([2.5, 1.5], [2.0, 2.2]) == pytest.approx(1.0)
+    assert ending_style_score([2.5, 1.5], [2.0, 2.2, 1.9]) == pytest.approx(1.0)
 
 
 def test_ending_style_reading_tone_penalized():
     from core.prosody import ending_style_score
     # 실측 사례: 화자 +2.0 vs 클론 -4.3 (낭독체 하강) → 감점
-    assert ending_style_score([-4.3, -3.5], [2.0, 1.8]) < 0.6
+    assert ending_style_score([-4.3, -3.5], [2.0, 1.8, 2.3]) < 0.6
 
 
-def test_ending_style_vacuous_when_no_data():
+def test_ending_style_vacuous_when_ref_unreliable():
     from core.prosody import ending_style_score
+    # 참조 표본 3개 미만이면 가드 무효화 — 빈약한 통계로 선별을 왜곡하지 않기
     assert ending_style_score([], [1.0]) == 1.0
+    assert ending_style_score([-9.0], [2.0, 1.8]) == 1.0
+
+
+def test_pick_best_take_dominance_rule():
+    from core.clone import pick_best_take
+    # 실사용 사고 재현: 최저 PNS(73.4) 테이크가 스타일 감점 덕에 sel 최고
+    takes = [{"pns": 81.1, "sel": 62.0}, {"pns": 84.4, "sel": 63.0},
+             {"pns": 73.4, "sel": 65.0}]  # ← sel 최고지만 품질 열세
+    assert pick_best_take(takes) == 1  # 지배 규칙: 품질권(84.4-8) 안에서 선별
+
+
+def test_pick_best_take_normal_case():
+    from core.clone import pick_best_take
+    takes = [{"pns": 85.0, "sel": 80.0}, {"pns": 86.0, "sel": 84.0}]
+    assert pick_best_take(takes) == 1
 
 
 # ---- 음절 강약 스타일 ----
