@@ -37,6 +37,27 @@ def test_codec_args():
     assert audio_codec_args(".mov") == ["-c:a", "aac", "-b:a", "192k"]
 
 
+# ---- 하이브리드 노이즈 제거 블렌딩 ----
+
+def test_blend_hybrid_protects_speech_and_gates_pauses():
+    np = pytest.importorskip("numpy")
+    from core.denoise import blend_hybrid
+    sr = 48_000
+    # 합성 신호: 1초 발화(사인파) + 1초 무음 잔여물(작은 잡음)
+    t = np.arange(sr) / sr
+    speech = 0.3 * np.sin(2 * np.pi * 220 * t).astype("float32")
+    residue = (0.01 * np.random.default_rng(0).standard_normal(sr)).astype("float32")
+    protected = np.concatenate([speech, residue])          # lim12: 무음에 잔여
+    full = np.concatenate([speech, np.zeros(sr, "float32")])  # 풀억제: 무음이 무음
+    out = blend_hybrid(protected, full, sr)
+    # 발화 중앙부는 보존 (protected 그대로)
+    mid = slice(int(0.3 * sr), int(0.6 * sr))
+    assert np.allclose(out[mid], protected[mid], atol=1e-4)
+    # 무음 후반부는 게이트로 조용 (잔여 대비 ≥ 20dB 감쇠)
+    tailr = slice(int(1.6 * sr), 2 * sr)
+    assert (out[tailr] ** 2).mean() < (residue[int(0.6*sr):sr] ** 2).mean() / 100
+
+
 # ---- 음량 정규화 (정적 게인) ----
 
 def test_normalize_gain_reaches_target():

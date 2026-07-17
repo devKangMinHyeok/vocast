@@ -40,7 +40,9 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return jsonify(ok=True, denoise=True, clone=clone_available())
+    from core.denoise import dfn_available
+    return jsonify(ok=True, denoise=True, clone=clone_available(),
+                   denoise_engine="dfn-hybrid" if dfn_available() else "rnnoise")
 
 
 def _save_upload(f):

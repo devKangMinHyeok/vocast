@@ -5,3 +5,4 @@ __pycache__/
 *.log
 .DS_Store
 models/dnsmos_sig_bak_ovr.onnx
+.venv-dfn/
