@@ -514,6 +514,22 @@ def test_report_boost_invariant():
     assert abs(r0["pause_supp_db"] - r1["pause_supp_db"]) < 0.5
 
 
+def test_run_denoise_rejects_unknown_mode(tmp_path):
+    from core.denoise import run_denoise
+    with pytest.raises(ValueError):
+        run_denoise(str(tmp_path / "a.wav"), str(tmp_path / "b.wav"),
+                    mode="magic")
+
+
+def test_run_denoise_resynth_requires_engine(tmp_path, monkeypatch):
+    """재합성 모드는 .venv-re가 있어야 시작된다 (설치 안내 에러)."""
+    import core.denoise as D
+    monkeypatch.setattr(D, "RE_VENV_PY", str(tmp_path / "없는경로"))
+    with pytest.raises(RuntimeError, match="install_resynth"):
+        D.run_denoise(str(tmp_path / "a.wav"), str(tmp_path / "b.wav"),
+                      mode="resynth")
+
+
 def test_dnjob_store_roundtrip(tmp_path, monkeypatch):
     import web.dnjobs as D
     monkeypatch.setattr(D, "DN_DIR", str(tmp_path / "denoise"))

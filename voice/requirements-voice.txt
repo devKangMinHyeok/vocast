@@ -8,8 +8,8 @@ torch
 torchaudio
 pyworld
 setuptools<81  # pyworld·webrtcvad가 pkg_resources를 아직 씀 (81부터 제거됨)
+resemblyzer    # 재합성 모드의 목소리 유사도(SIM) 리포트에 필요
 # (선택) 품질 평가 evaluate_tts.py / quality까지 쓸 때만 필요
-# resemblyzer
 # jiwer
 # onnxruntime
 # setuptools<81   # resemblyzer의 webrtcvad가 pkg_resources를 아직 씀

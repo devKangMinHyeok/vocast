@@ -27,10 +27,15 @@ def _persist(job, jdir):
         json.dump(job, f, ensure_ascii=False, indent=2)
 
 
-def start_denoise_job(file_storage, boost=0.0):
-    """업로드 파일 → 백그라운드 노이즈 제거 작업. → job_id"""
+def start_denoise_job(file_storage, boost=0.0, mode="standard"):
+    """업로드 파일 → 백그라운드 노이즈 제거 작업. → job_id
+
+    mode="standard"(필터형 하이브리드) | "resynth"(생성형 재합성 —
+    발화 중 노이즈까지 제거하되 목소리 유사도(SIM)를 함께 실측해 리포트).
+    """
     from core.audio import default_output_ext, make_audio_preview, media_duration
-    from core.denoise import denoise_report, dfn_available, run_denoise
+    from core.denoise import (denoise_report, dfn_available, run_denoise,
+                              voice_similarity)
 
     os.makedirs(DN_DIR, exist_ok=True)
     jid = uuid.uuid4().hex[:10]
@@ -46,8 +51,9 @@ def start_denoise_job(file_storage, boost=0.0):
 
     job = {"id": jid, "status": "running", "stage": "extract",
            "title": name, "out_name": f"{base}_clean{out_ext}",
-           "boost": float(boost),
-           "engine": "dfn-hybrid" if dfn_available() else "rnnoise",
+           "boost": float(boost), "mode": mode,
+           "engine": ("resynth" if mode == "resynth"
+                      else "dfn-hybrid" if dfn_available() else "rnnoise"),
            "size_mb": round(os.path.getsize(src) / 1e6, 1),
            "duration": None, "report": None, "error": None,
            "created": time.strftime("%Y-%m-%d %H:%M"),
@@ -63,12 +69,19 @@ def start_denoise_job(file_storage, boost=0.0):
         t0 = time.time()
         try:
             job["duration"] = media_duration(src)
-            run_denoise(src, out, boost=boost, on_progress=on_progress)
+            run_denoise(src, out, boost=boost, mode=mode,
+                        on_progress=on_progress)
             job["stage"] = "preview"
             make_audio_preview(src, os.path.join(jdir, "orig.m4a"))
             make_audio_preview(out, os.path.join(jdir, "clean.m4a"))
             job["stage"] = "report"
-            job["report"] = denoise_report(src, out)
+            if mode == "resynth":
+                # 프레임 단위 손실 지표는 재생성 오디오에 무효 (실측:
+                # 손실 12.7%로 떴지만 받아쓰기는 95.7% 일치 — 에너지 윤곽을
+                # 새로 그려서 생기는 착시) → 재합성은 SIM만 리포트
+                job["report"] = {"sim": voice_similarity(src, out)}
+            else:
+                job["report"] = denoise_report(src, out)
             job.update({"status": "done", "stage": "done",
                         "elapsed_sec": round(time.time() - t0)})
         except Exception as e:

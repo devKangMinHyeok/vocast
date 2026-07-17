@@ -40,9 +40,10 @@ def index():
 
 @app.get("/api/health")
 def health():
-    from core.denoise import dfn_available
+    from core.denoise import dfn_available, resynth_available
     return jsonify(ok=True, denoise=True, clone=clone_available(),
-                   denoise_engine="dfn-hybrid" if dfn_available() else "rnnoise")
+                   denoise_engine="dfn-hybrid" if dfn_available() else "rnnoise",
+                   resynth=resynth_available())
 
 
 def _save_upload(f):
@@ -127,7 +128,14 @@ def dnjobs_create_api():
         boost = float(request.form.get("boost") or 0)
     except ValueError:
         boost = 0.0
-    return jsonify(job_id=dnjobs.start_denoise_job(f, boost=boost))
+    mode = request.form.get("mode") or "standard"
+    if mode not in ("standard", "resynth"):
+        return jsonify(error="mode는 standard 또는 resynth"), 400
+    if mode == "resynth":
+        from core.denoise import resynth_available
+        if not resynth_available():
+            return jsonify(error="재합성 엔진 미설치 — bash scripts/install_resynth.sh"), 501
+    return jsonify(job_id=dnjobs.start_denoise_job(f, boost=boost, mode=mode))
 
 
 @app.get("/api/dnjobs")
