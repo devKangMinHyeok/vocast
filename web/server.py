@@ -201,10 +201,34 @@ def jobs_create_api():
         except ValueError as e:
             return jsonify(error=str(e)), 400
 
+    takes = None
+    if request.form.get("takes"):
+        try:
+            takes = min(8, max(1, int(request.form["takes"])))
+        except ValueError:
+            pass
     job_id = profiles.start_clone_job(text, fast, ref_path=ref_path,
                                       profile_id=profile_id,
-                                      profile_name=profile_name)
+                                      profile_name=profile_name,
+                                      takes=takes,
+                                      title=request.form.get("title") or None)
     return jsonify(job_id=job_id)
+
+
+@app.post("/api/jobs/<job_id>/regen")
+def jobs_regen_api(job_id):
+    """문단 부분 재생성 → 새 버전 작업 (ElevenLabs Studio식 워크플로)."""
+    if not clone_available():
+        return jsonify(error="mlx-audio 미설치"), 501
+    body = request.get_json(silent=True) or {}
+    try:
+        idx = int(body.get("paragraph", -1))
+    except (TypeError, ValueError):
+        return jsonify(error="문단 번호가 잘못됐습니다"), 400
+    try:
+        return jsonify(job_id=profiles.start_regen_job(job_id, idx))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
 
 
 @app.get("/api/jobs/<job_id>")
@@ -226,6 +250,22 @@ def jobs_audio_api(job_id):
 @app.get("/api/history")
 def history_api():
     return jsonify(items=profiles.list_history())
+
+
+@app.patch("/api/history/<job_id>")
+def history_rename_api(job_id):
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(title=profiles.rename_history(job_id,
+                                                     body.get("title", "")))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+
+
+@app.delete("/api/history/<job_id>")
+def history_delete_api(job_id):
+    profiles.delete_history(job_id)
+    return jsonify(ok=True)
 
 
 def main():

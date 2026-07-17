@@ -191,32 +191,76 @@ def profile_paths(pid):
 
 # ---- 생성 작업 (비동기 세션) ----
 
-def start_clone_job(text, fast, ref_path=None, profile_id=None,
-                    profile_name=None):
-    """백그라운드 생성 작업 시작 → job_id. 진행은 JOBS[job_id]에 기록."""
-    from core.clone import DEFAULT_TAKES, clone_voice, synthesize_best
+def _new_job(job_id, text, profile_name, profile_id, settings,
+             title=None, parent=None, version=1):
+    """작업 레코드 공통 골격 — 라이브러리 카드·버전 계보·이어서 작업의 재료."""
+    return {"id": job_id, "status": "preparing", "stage": "reference",
+            "takes": [], "composed": [], "paragraphs": None,
+            "text": text, "profile": profile_name, "profile_id": profile_id,
+            "title": (title or text.strip().replace("\n", " ")[:24]).strip(),
+            "settings": settings, "version": version, "parent": parent,
+            "created": time.strftime("%Y-%m-%d %H:%M"),
+            "started_ts": time.time(), "error": None, "pns": None}
 
-    _ensure_dirs()
-    job_id = uuid.uuid4().hex[:10]
-    job = {"id": job_id, "status": "preparing", "stage": "reference",
-           "takes": [], "text": text, "profile": profile_name,
-           "created": time.strftime("%Y-%m-%d %H:%M"), "error": None,
-           "pns": None}
-    with _LOCK:
-        JOBS[job_id] = job
 
+def _make_progress(job):
+    """코어 진행 이벤트 → 작업 레코드 반영 (파이프라인 가시성의 데이터원)."""
     def on_progress(ev):
         with _LOCK:
             s = ev.get("stage")
             if s == "reference_done":
                 job["status"] = "generating"
                 job["stage"] = "takes"
+            elif s == "paragraph":
+                job["paragraph"] = {"i": ev["i"], "n": ev["n"]}
             elif s == "take":
                 job["stage"] = f"take {ev['i']}/{ev['n']}"
             elif s == "take_scored":
                 job["takes"].append(ev)
+            elif s == "composed":
+                job["composed"].append(ev.get("takes"))
             elif s == "done":
                 job["stage"] = "post"
+                if ev.get("pns") is not None:
+                    job["final_pns"] = ev["pns"]
+                if ev.get("paragraphs"):
+                    job["paragraphs"] = ev["paragraphs"]
+    return on_progress
+
+
+def _finish_job(job, out, t_start):
+    picked = max(job["takes"], key=lambda t: t.get("sel", -1e9), default=None)
+    elapsed = time.time() - t_start
+    rtf = None
+    try:  # 처리량 북극성: RTF = 처리 시간 / 오디오 길이
+        import soundfile as sf
+        rtf = round(elapsed / max(sf.info(out).duration, 0.1), 1)
+    except Exception:
+        pass
+    job.update({"status": "done", "stage": "done",
+                "pns": job.pop("final_pns", None)
+                or (picked.get("pns") if picked else None),
+                "elapsed_sec": round(elapsed), "rtf": rtf})
+
+
+def _persist_job(job, jdir):
+    with open(os.path.join(jdir, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(job, f, ensure_ascii=False, indent=2)
+
+
+def start_clone_job(text, fast, ref_path=None, profile_id=None,
+                    profile_name=None, takes=None, title=None):
+    """백그라운드 생성 작업 시작 → job_id. 진행은 JOBS[job_id]에 기록."""
+    from core.clone import DEFAULT_TAKES, clone_voice, synthesize_best
+
+    _ensure_dirs()
+    job_id = uuid.uuid4().hex[:10]
+    n_takes = takes or (1 if fast else DEFAULT_TAKES)
+    job = _new_job(job_id, text, profile_name, profile_id,
+                   {"fast": bool(fast), "takes": n_takes}, title=title)
+    with _LOCK:
+        JOBS[job_id] = job
+    on_progress = _make_progress(job)
 
     def run():
         jdir = os.path.join(HISTORY_DIR, job_id)
@@ -224,42 +268,106 @@ def start_clone_job(text, fast, ref_path=None, profile_id=None,
         out = os.path.join(jdir, "output.wav")
         t_start = time.time()
         try:
-            takes = 1 if fast else DEFAULT_TAKES
             if profile_id:
                 paths = profile_paths(profile_id)
                 if not paths:
                     raise RuntimeError("프로필이 아직 준비되지 않았습니다")
                 job["status"] = "generating"
                 synthesize_best(text, paths[0], paths[1], paths[2], out,
-                                fast=fast, takes=takes,
+                                fast=fast, takes=n_takes,
                                 on_progress=on_progress)
             else:
-                clone_voice(ref_path, text, out, fast=fast, takes=takes,
+                clone_voice(ref_path, text, out, fast=fast, takes=n_takes,
                             on_progress=on_progress)
-            picked = max(job["takes"], key=lambda t: t.get("sel", -1e9),
-                         default=None)
-            elapsed = time.time() - t_start
-            rtf = None
-            try:  # 처리량 북극성: RTF = 처리 시간 / 오디오 길이
-                import soundfile as sf
-                info = sf.info(out)
-                rtf = round(elapsed / max(info.duration, 0.1), 1)
-            except Exception:
-                pass
-            job.update({"status": "done", "stage": "done",
-                        "pns": picked.get("pns") if picked else None,
-                        "elapsed_sec": round(elapsed), "rtf": rtf})
+            _finish_job(job, out, t_start)
         except Exception as e:  # 실패도 세션에 기록
             job.update({"status": "error", "error": str(e)[-300:]})
         finally:
             if ref_path and os.path.exists(ref_path):
                 os.remove(ref_path)
-            with open(os.path.join(jdir, "meta.json"), "w",
-                      encoding="utf-8") as f:
-                json.dump(job, f, ensure_ascii=False, indent=2)
+            _persist_job(job, jdir)
 
     threading.Thread(target=run, daemon=True).start()
     return job_id
+
+
+def start_regen_job(parent_id, index):
+    """완성 작업에서 문단 하나만 다시 생성한 새 버전(v+1) 작업 시작.
+
+    ElevenLabs Studio식 부분 재생성 — 전체를 다시 만들지 않고 마음에 안 드는
+    문단만 교체. 프로필 기반 작업만 지원(업로드 참조는 작업 후 삭제되므로).
+    """
+    from core.clone import DEFAULT_TAKES, regenerate_paragraph
+
+    parent = get_job(parent_id)
+    if not parent or parent.get("status") != "done":
+        raise ValueError("완성된 작업이 아닙니다")
+    paras = parent.get("paragraphs")
+    if not paras or not (0 <= index < len(paras)):
+        raise ValueError("문단 정보가 없는 작업입니다 (새로 만든 작업부터 지원돼요)")
+    pid = parent.get("profile_id")
+    paths = profile_paths(pid) if pid else None
+    if not paths:
+        raise ValueError("프로필로 만든 작업만 문단 재생성이 가능합니다")
+    src = job_output(parent_id)
+    if not src:
+        raise ValueError("원본 오디오 파일이 없습니다")
+
+    _ensure_dirs()
+    settings = parent.get("settings") or {}
+    job_id = uuid.uuid4().hex[:10]
+    job = _new_job(job_id, parent["text"], parent.get("profile"), pid,
+                   settings, title=parent.get("title"),
+                   parent={"job": parent_id, "kind": "paragraph",
+                           "index": index},
+                   version=int(parent.get("version", 1)) + 1)
+    job.update({"status": "generating", "stage": "takes"})
+    with _LOCK:
+        JOBS[job_id] = job
+    on_progress = _make_progress(job)
+
+    def run():
+        jdir = os.path.join(HISTORY_DIR, job_id)
+        os.makedirs(jdir, exist_ok=True)
+        out = os.path.join(jdir, "output.wav")
+        t_start = time.time()
+        try:
+            regenerate_paragraph(src, paras, index, paths[0], paths[1],
+                                 paths[2], out, fast=settings.get("fast", False),
+                                 takes=settings.get("takes", DEFAULT_TAKES),
+                                 on_progress=on_progress)
+            _finish_job(job, out, t_start)
+        except Exception as e:
+            job.update({"status": "error", "error": str(e)[-300:]})
+        finally:
+            _persist_job(job, jdir)
+
+    threading.Thread(target=run, daemon=True).start()
+    return job_id
+
+
+def rename_history(job_id, title):
+    """작업 이름 변경 — 라이브러리에서 알아보기 쉽게."""
+    title = (title or "").strip()[:60]
+    if not title:
+        raise ValueError("이름이 비어 있습니다")
+    meta_p = os.path.join(HISTORY_DIR, job_id, "meta.json")
+    with _LOCK:
+        if job_id in JOBS:
+            JOBS[job_id]["title"] = title
+    if os.path.exists(meta_p):
+        with open(meta_p, encoding="utf-8") as f:
+            meta = json.load(f)
+        meta["title"] = title
+        with open(meta_p, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    return title
+
+
+def delete_history(job_id):
+    with _LOCK:
+        JOBS.pop(job_id, None)
+    shutil.rmtree(os.path.join(HISTORY_DIR, job_id), ignore_errors=True)
 
 
 def get_job(job_id):

@@ -108,6 +108,24 @@
   .plist-item .grow { flex: 1; }
   .mini { padding: 7px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg);
     color: var(--text); cursor: pointer; font-size: .82rem; }
+  /* 작업 라이브러리 */
+  .job-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px; margin-top: 10px; }
+  .job-head { display: flex; align-items: flex-start; gap: 8px; }
+  .job-head .grow { flex: 1; min-width: 0; }
+  .job-title { font-weight: 600; font-size: .95rem; word-break: break-all; }
+  .ver { font-size: .7rem; color: var(--accent); border: 1px solid var(--accent);
+    border-radius: 6px; padding: 1px 6px; margin-left: 6px; white-space: nowrap; }
+  .icon-btn { border: 0; background: none; cursor: pointer; font-size: .9rem; color: var(--sub); padding: 2px 4px; }
+  .job-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .job-actions .mini { text-decoration: none; }
+  .para-item { border-top: 1px solid var(--line); padding: 10px 0 8px; font-size: .86rem; }
+  .para-item:first-child { border-top: 0; }
+  .paras { margin-top: 10px; border-top: 1px solid var(--line); }
+  /* 문단 진행 바 */
+  .bar { height: 6px; background: var(--line); border-radius: 4px; margin-top: 12px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); transition: width .5s; }
+  .compose-note { margin-top: 10px; font-size: .8rem; color: var(--sub); }
 </style>
 </head>
 <body>
@@ -157,13 +175,17 @@
         <div class="stage" id="stg2">3. 마무리 손질</div>
         <div class="stage" id="stg3">✓ 완성</div>
       </div>
+      <div class="bar" id="paraBar" style="display:none"><div id="paraFill" style="width:0%"></div></div>
       <div class="takes" id="takeCards"></div>
       <div class="status" id="clStatus"></div>
+      <div class="compose-note" id="composeNote"></div>
       <audio id="clAudio" controls style="display:none"></audio>
     </div>
 
     <div class="card" id="historyCard" style="display:none">
-      <h3>📼 최근 세션</h3>
+      <h3>📚 작업 라이브러리</h3>
+      <p class="muted">완성된 작업에서 바로 이어가세요 — 원고를 고쳐 다시 만들거나(🔁),
+      같은 설정으로 한 번 더 돌리거나(🎲), 마음에 안 드는 문단만 갈아끼울 수 있어요(📑).</p>
       <div id="historyList"></div>
     </div>
 
@@ -327,12 +349,22 @@ function setStages(n) { // 0~3 진행, -1 리셋
     el.className = 'stage' + (i < n ? ' done' : i === n ? ' on' : '');
   }
 }
+const esc = s => (s ?? '').toString().replace(/[&<>"']/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtSec = s => s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초`;
+
 function renderTakes(takes) {
-  let bestIdx = -1, bestSel = -1e9;
-  takes.forEach((t, i) => { if (t.sel > bestSel) { bestSel = t.sel; bestIdx = i; } });
-  $('takeCards').innerHTML = takes.map((t, i) => `
-    <div class="take${i === bestIdx ? ' best' : ''}">
-      <div class="sub2">테이크 ${t.i}${i === bestIdx ? ' 👑' : ''}</div>
+  // 문단별로 최고 테이크 표시 (문단이 진행 단위)
+  const byPara = {};
+  takes.forEach((t, i) => { (byPara[t.para || 1] ||= []).push([t, i]); });
+  for (const g of Object.values(byPara)) {
+    let best = -1e9, bi = -1;
+    g.forEach(([t, i]) => { if (t.sel > best) { best = t.sel; bi = i; } });
+    g.forEach(([t, i]) => t._best = (i === bi));
+  }
+  $('takeCards').innerHTML = takes.map(t => `
+    <div class="take${t._best ? ' best' : ''}">
+      <div class="sub2">${t.para ? `문단${t.para}·` : ''}테이크 ${t.i}${t._best ? ' 👑' : ''}</div>
       <div class="score">${t.pns}</div>
       <div class="sub2">끝음 ${t.ending} · 강약 ${t.stress}<br>속도 ${t.rate}/s</div>
     </div>`).join('');
@@ -342,6 +374,7 @@ $('clGo').onclick = async () => {
   $('clGo').disabled = true;
   $('jobPanel').style.display = 'block';
   $('takeCards').innerHTML = ''; $('clAudio').style.display = 'none';
+  $('composeNote').textContent = ''; $('paraBar').style.display = 'none';
   setStages(0);
   setStatus($('clStatus'), '<span class="spinner"></span>참조 목소리 분석 중…');
   const fd = new FormData();
@@ -364,16 +397,31 @@ function poll(jobId) {
     try {
       const job = await api('/api/jobs/' + jobId);
       if (job.takes?.length) renderTakes(job.takes);
+      const elapsed = job.started_ts
+        ? ` · 경과 ${fmtSec(Math.max(0, Math.round(Date.now() / 1000 - job.started_ts)))}` : '';
+      if (job.paragraph && job.status === 'generating') {  // 문단 진행 바
+        $('paraBar').style.display = 'block';
+        $('paraFill').style.width = Math.round((job.paragraph.i - 1) / job.paragraph.n * 100) + '%';
+      }
       if (job.status === 'preparing') {
         setStages(0);
         setStatus($('clStatus'), '<span class="spinner"></span>참조 목소리 분석 중… (노이즈 제거 → 최적 구간 선택 → 받아쓰기)');
       } else if (job.status === 'generating') {
         setStages(job.stage === 'post' ? 2 : 1);
-        setStatus($('clStatus'), `<span class="spinner"></span>${job.stage === 'post' ? '호흡·강세·음량 마무리 중…' : '테이크 오디션 중 — 억양·호흡·끝음·강약을 채점해 최고를 뽑습니다 (' + job.stage + ')'}`);
+        const para = job.paragraph ? `문단 ${job.paragraph.i}/${job.paragraph.n} · ` : '';
+        setStatus($('clStatus'), `<span class="spinner"></span>${job.stage === 'post' ? '호흡·강세·음량 마무리 중…' : para + '테이크 오디션 중 — 억양·호흡·끝음·강약을 채점해 최고를 뽑습니다 (' + job.stage + ')'}${elapsed}`);
       } else if (job.status === 'done') {
         clearInterval(pollTimer);
         setStages(4); $('stg3').classList.add('done');
-        setStatus($('clStatus'), `✅ 완성! 최종 운율 점수 ${job.pns ?? '-'}`, 'ok');
+        $('paraBar').style.display = 'none';
+        const extra = [job.pns != null ? `운율 점수 ${job.pns}` : '',
+                       job.elapsed_sec ? fmtSec(job.elapsed_sec) : '',
+                       job.rtf ? `RTF ${job.rtf}` : ''].filter(Boolean).join(' · ');
+        setStatus($('clStatus'), `✅ 완성! ${extra}`, 'ok');
+        if (job.composed?.length) {
+          $('composeNote').textContent = '🧩 문장 조합: 문장마다 최고 테이크를 골라 이어붙였어요 — '
+            + job.composed.map(c => (c || []).join('·')).join(' | ');
+        }
         const audio = $('clAudio');
         audio.src = '/api/jobs/' + jobId + '/audio';
         audio.style.display = 'block';
@@ -381,6 +429,7 @@ function poll(jobId) {
         loadHistory();
       } else if (job.status === 'error') {
         clearInterval(pollTimer);
+        $('paraBar').style.display = 'none';
         setStatus($('clStatus'), '❌ ' + (job.error || '실패'), 'err');
         $('clGo').disabled = false; clReady();
       }
@@ -388,29 +437,128 @@ function poll(jobId) {
   }, 1500);
 }
 
+// ---- 작업 라이브러리: 재생·다운로드·이어서 작업·재실행·문단 재생성 ----
+let LIB = {}, openParas = new Set();
+
+function verBadge(j) {
+  if (!j.version || j.version <= 1) return '';
+  const why = j.parent?.kind === 'paragraph' ? ` · 문단${(j.parent.index ?? 0) + 1} 재생성` : '';
+  return `<span class="ver">v${j.version}${why}</span>`;
+}
+
+function jobCard(j) {
+  const done = j.status === 'done';
+  const metaLine = [j.created, j.profile ? '프로필 ' + esc(j.profile) : '파일 업로드',
+    done && j.pns != null ? 'PNS ' + j.pns : '', done && j.rtf ? 'RTF ' + j.rtf : '',
+    j.status === 'error' ? '❌ 실패' : (!done ? '⏳ 진행 중' : '')].filter(Boolean).join(' · ');
+  const paras = (j.paragraphs || []);
+  return `<div class="job-card">
+    <div class="job-head">
+      <div class="grow">
+        <div class="job-title">${esc(j.title || (j.text || '').slice(0, 24))}${verBadge(j)}</div>
+        <div class="muted">${metaLine}</div>
+      </div>
+      <button class="icon-btn" title="이름 바꾸기" onclick="renameJob('${j.id}')">✏️</button>
+      <button class="icon-btn" title="삭제" onclick="deleteJob('${j.id}')">🗑</button>
+    </div>
+    ${done ? `<audio id="aud-${j.id}" controls preload="none" src="/api/jobs/${j.id}/audio"></audio>
+    <div class="job-actions">
+      <button class="mini" onclick="remixJob('${j.id}')">🔁 이어서 작업</button>
+      ${j.profile_id ? `<button class="mini" onclick="rerunJob('${j.id}')">🎲 같은 설정으로 다시</button>` : ''}
+      <a class="mini" href="/api/jobs/${j.id}/audio" download="${esc(j.title || '클론낭독')}.wav">⬇ 저장</a>
+      ${paras.length ? `<button class="mini" onclick="toggleParas('${j.id}')">📑 문단 ${paras.length}개</button>` : ''}
+    </div>
+    ${paras.length ? `<div class="paras" id="paras-${j.id}" style="display:${openParas.has(j.id) ? 'block' : 'none'}">
+      ${paras.map((p, i) => `<div class="para-item">
+        <div>${i + 1}. ${esc((p.text || '').slice(0, 64))}${(p.text || '').length > 64 ? '…' : ''}</div>
+        <div class="muted">PNS ${p.pns ?? '-'} · ${p.start}s ~ ${p.end}s</div>
+        <div class="job-actions">
+          <button class="mini" onclick="playPara('${j.id}',${i})">▶ 이 문단 듣기</button>
+          ${j.profile_id ? `<button class="mini" onclick="regenPara('${j.id}',${i})">🔄 이 문단만 다시 생성</button>` : ''}
+        </div></div>`).join('')}
+    </div>` : ''}` : ''}
+  </div>`;
+}
+
 async function loadHistory() {
   try {
     const { items } = await api('/api/history');
     if (!items.length) { $('historyCard').style.display = 'none'; return; }
+    LIB = {}; items.forEach(j => LIB[j.id] = j);
     $('historyCard').style.display = 'block';
-    $('historyList').innerHTML = items.map(j => `
-      <div class="plist-item">
-        <div class="grow">
-          <div>${(j.text || '').slice(0, 30)}${(j.text || '').length > 30 ? '…' : ''}</div>
-          <div class="muted">${j.created} · ${j.profile ? '프로필 ' + j.profile : '파일 업로드'} ·
-            ${j.status === 'done' ? 'PNS ' + (j.pns ?? '-') : j.status}</div>
-        </div>
-        ${j.status === 'done' ? `<button class="mini" onclick="playHistory('${j.id}')">▶ 재생</button>
-        <a class="mini" href="/api/jobs/${j.id}/audio" download="클론낭독_${j.id}.wav">↓</a>` : ''}
-      </div>`).join('');
+    $('historyList').innerHTML = items.map(jobCard).join('');
   } catch {}
 }
-window.playHistory = id => {
-  const audio = $('clAudio');
+window.toggleParas = id => {
+  const el = $('paras-' + id);
+  const show = el.style.display === 'none';
+  el.style.display = show ? 'block' : 'none';
+  show ? openParas.add(id) : openParas.delete(id);
+};
+window.playPara = (id, i) => {
+  const p = LIB[id]?.paragraphs?.[i]; if (!p) return;
+  const a = $('aud-' + id);
+  a.currentTime = p.start;
+  a.play();
+  a.ontimeupdate = () => { if (a.currentTime >= p.end) { a.pause(); a.ontimeupdate = null; } };
+};
+window.regenPara = async (id, i) => {
+  try {
+    const { job_id } = await api(`/api/jobs/${id}/regen`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paragraph: i }) });
+    $('jobPanel').style.display = 'block';
+    $('takeCards').innerHTML = ''; $('composeNote').textContent = '';
+    $('clAudio').style.display = 'none';
+    setStages(1);
+    setStatus($('clStatus'), `<span class="spinner"></span>문단 ${i + 1}만 다시 생성 중 — 완성되면 새 버전(v${(LIB[id]?.version || 1) + 1})으로 저장돼요`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    poll(job_id);
+  } catch (e) { alert('문단 재생성 실패: ' + e.message); }
+};
+window.remixJob = id => {
+  const j = LIB[id]; if (!j) return;
+  $('clText').value = j.text || '';
+  if (j.profile_id) { $('clSource').value = j.profile_id; onSourceChange(); }
+  $('clFast').checked = !!j.settings?.fast;
+  clReady();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
   $('jobPanel').style.display = 'block';
-  audio.src = '/api/jobs/' + id + '/audio';
-  audio.style.display = 'block';
-  audio.play();
+  $('takeCards').innerHTML = ''; $('composeNote').textContent = '';
+  setStages(-1);
+  setStatus($('clStatus'), '✏️ 원고를 불러왔어요 — 수정한 뒤 "이 목소리로 읽어주기"를 누르면 새 작업으로 만들어져요');
+};
+window.rerunJob = async id => {
+  const j = LIB[id]; if (!j?.profile_id) return;
+  const fd = new FormData();
+  fd.append('text', j.text); fd.append('fast', j.settings?.fast ? '1' : '0');
+  fd.append('profile_id', j.profile_id);
+  if (j.settings?.takes) fd.append('takes', j.settings.takes);
+  fd.append('title', (j.title || '') + ' (다시)');
+  try {
+    const { job_id } = await api('/api/jobs', { method: 'POST', body: fd });
+    $('jobPanel').style.display = 'block';
+    $('takeCards').innerHTML = ''; $('composeNote').textContent = '';
+    $('clAudio').style.display = 'none';
+    setStages(1);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    poll(job_id);
+  } catch (e) { alert('재실행 실패: ' + e.message); }
+};
+window.renameJob = async id => {
+  const t = prompt('작업 이름', LIB[id]?.title || '');
+  if (!t?.trim()) return;
+  try {
+    await api('/api/history/' + id, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: t.trim() }) });
+    loadHistory();
+  } catch (e) { alert('이름 변경 실패: ' + e.message); }
+};
+window.deleteJob = async id => {
+  if (!confirm('이 작업을 삭제할까요? 오디오도 함께 지워져요.')) return;
+  await api('/api/history/' + id, { method: 'DELETE' });
+  loadHistory();
 };
 
 // ---- 내 목소리: 프로필 목록 + 녹음 위저드 ----

@@ -377,6 +377,69 @@ def test_profile_store_roundtrip(tmp_path, monkeypatch):
     assert not any(m["id"] == meta["id"] for m in P.list_profiles())
 
 
+def test_splice_paragraphs_meta_shifts_following():
+    """문단 교체 시 뒤 문단 경계가 길이 변화만큼 밀린다 (부분 재생성의 산수)."""
+    from core.clone import splice_paragraphs_meta
+    paras = [{"text": "a", "start": 0.0, "end": 10.0, "pns": 80},
+             {"text": "b", "start": 11.0, "end": 20.0, "pns": 81},
+             {"text": "c", "start": 21.0, "end": 30.0, "pns": 82}]
+    out = splice_paragraphs_meta(paras, 1, 12.0)  # 9초 → 12초 (+3)
+    assert out[0] == paras[0]                      # 앞 문단은 그대로
+    assert out[1]["start"] == 11.0 and out[1]["end"] == 23.0
+    assert out[2]["start"] == 24.0 and out[2]["end"] == 33.0
+    assert paras[1]["end"] == 20.0                 # 원본 불변 (순수 함수)
+
+
+def test_splice_paragraphs_meta_shorter_replacement():
+    from core.clone import splice_paragraphs_meta
+    paras = [{"text": "a", "start": 0.0, "end": 10.0},
+             {"text": "b", "start": 11.0, "end": 20.0}]
+    out = splice_paragraphs_meta(paras, 0, 6.0)    # 10초 → 6초 (-4)
+    assert out[0]["end"] == 6.0
+    assert out[1]["start"] == 7.0 and out[1]["end"] == 16.0
+
+
+def test_history_rename_and_delete(tmp_path, monkeypatch):
+    import web.profiles as P
+    monkeypatch.setattr(P, "PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "history"))
+    jdir = tmp_path / "history" / "abc123"
+    jdir.mkdir(parents=True)
+    (jdir / "meta.json").write_text(
+        '{"id": "abc123", "status": "done", "title": "옛 이름"}',
+        encoding="utf-8")
+    assert P.rename_history("abc123", "새 이름") == "새 이름"
+    assert P.get_job("abc123")["title"] == "새 이름"
+    with pytest.raises(ValueError):
+        P.rename_history("abc123", "   ")
+    P.delete_history("abc123")
+    assert P.get_job("abc123") is None
+
+
+def test_regen_job_rejects_unfinished(tmp_path, monkeypatch):
+    """문단 재생성은 완성작 + 문단 경계 + 프로필이 있어야 시작된다."""
+    import web.profiles as P
+    monkeypatch.setattr(P, "PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "history"))
+    with pytest.raises(ValueError):
+        P.start_regen_job("없는작업", 0)
+    jdir = tmp_path / "history" / "j1"
+    jdir.mkdir(parents=True)
+    (jdir / "meta.json").write_text(
+        '{"id": "j1", "status": "done", "text": "t", "paragraphs": null}',
+        encoding="utf-8")
+    with pytest.raises(ValueError):  # 문단 정보 없는 옛 작업
+        P.start_regen_job("j1", 0)
+
+
+def test_new_job_defaults_title_from_text():
+    from web.profiles import _new_job
+    job = _new_job("x", "안녕하세요. 오늘은 테스트입니다. " * 5, None, None, {})
+    assert 0 < len(job["title"]) <= 24
+    assert job["version"] == 1 and job["parent"] is None
+    assert job["composed"] == [] and job["paragraphs"] is None
+
+
 # ---- 웹 서버 (기능 감지 포함) ----
 
 def test_health_endpoint():

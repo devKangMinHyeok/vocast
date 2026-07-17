@@ -286,6 +286,73 @@ def split_paragraphs(text, max_sents=PARAGRAPH_SENTS):
     return [p for p in paras if p]
 
 
+def build_prosody_ctx(natural_wav):
+    """화자의 자연 운율 컨텍스트 — 문단들이 공유하고, 부분 재생성도 재사용."""
+    from .prosody import ending_metrics, prosody_features, stress_features
+    feats = prosody_features(natural_wav)
+    slopes, cliff = ending_metrics(natural_wav)
+    return {"feats": feats, "rate": feats["artic_rate"], "slopes": slopes,
+            "stress": stress_features(natural_wav), "cliff": cliff,
+            "wav": natural_wav}
+
+
+def splice_paragraphs_meta(paragraphs, index, new_dur):
+    """문단 index를 new_dur(초) 길이로 교체한 뒤의 경계 목록 (순수 함수)."""
+    old = paragraphs[index]
+    delta = new_dur - (old["end"] - old["start"])
+    out = []
+    for i, p in enumerate(paragraphs):
+        q = dict(p)
+        if i == index:
+            q["end"] = round(p["start"] + new_dur, 3)
+        elif i > index:
+            q["start"] = round(p["start"] + delta, 3)
+            q["end"] = round(p["end"] + delta, 3)
+        out.append(q)
+    return out
+
+
+def regenerate_paragraph(parent_wav, paragraphs, index, ref_wav, ref_text,
+                         natural_wav, output_path, fast=False,
+                         takes=DEFAULT_TAKES, on_progress=None):
+    """완성본에서 문단 하나만 다시 생성해 갈아끼운다 (부분 재생성).
+
+    전체를 다시 만들지 않고 마음에 안 드는 문단만 교체 — 문단이 파이프라인의
+    재사용 단위라서 가능. 반환: (새 문단 경계 목록, 새 문단 PNS).
+    """
+    import numpy as np
+    import soundfile as sf
+    from .audio import normalize_speech_level
+
+    para = paragraphs[index]
+    ctx = build_prosody_ctx(natural_wav)
+    y, sr = sf.read(parent_wav, dtype="float32")
+    if y.ndim > 1:
+        y = y.mean(axis=1)
+    with tempfile.TemporaryDirectory() as wd:
+        part = os.path.join(wd, "part.wav")
+        pns = _generate_unit(para["text"], ref_wav, ref_text, ctx, part,
+                             fast=fast, takes=takes, on_progress=on_progress)
+        normalize_speech_level(part)
+        if sf.info(part).samplerate != sr:  # 보통 동일(24kHz) — 방어적 변환
+            conv = os.path.join(wd, "part_sr.wav")
+            run_ffmpeg(["-i", part, "-ar", str(sr), conv])
+            part = conv
+        new = sf.read(part, dtype="float32")[0]
+    if new.ndim > 1:
+        new = new.mean(axis=1)
+    fade = int(sr * 0.01)
+    if len(new) > 2 * fade:
+        new[:fade] *= np.linspace(0, 1, fade)
+        new[-fade:] *= np.linspace(1, 0, fade)
+    a, b = int(para["start"] * sr), int(para["end"] * sr)
+    sf.write(output_path, np.concatenate([y[:a], new, y[b:]]), sr)
+    metas = splice_paragraphs_meta(paragraphs, index, len(new) / sr)
+    metas[index]["pns"] = round(pns, 1)  # 교체된 문단은 새 점수로
+    _notify(on_progress, stage="done", pns=round(pns, 1), paragraphs=metas)
+    return metas, pns
+
+
 def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
                     fast=False, takes=DEFAULT_TAKES, on_progress=None):
     """best-of-N 테이크 + 문장 조합. 긴 원고는 문단 단위로 파이프라인 재사용.
@@ -295,7 +362,7 @@ def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
     운율 의존성이 없으면 단일 테이크 폴백.
     """
     from .audio import normalize_speech_level
-    from .prosody import prosody_deps_available, split_sentences
+    from .prosody import prosody_deps_available
     if takes <= 1 or not prosody_deps_available():
         _notify(on_progress, stage="take", i=1, n=1)
         out = synthesize(text, ref_wav, ref_text, output_path, fast=fast)
@@ -307,20 +374,18 @@ def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
         _notify(on_progress, stage="done")
         return out, None
 
-    # 자연 운율 컨텍스트는 원고 전체에서 1회만 계산 (문단들이 공유)
-    from .prosody import (ending_metrics, prosody_features, stress_features)
-    natural_feats = prosody_features(natural_wav)
-    natural_slopes, natural_cliff = ending_metrics(natural_wav)
-    ctx = {"feats": natural_feats, "rate": natural_feats["artic_rate"],
-           "slopes": natural_slopes, "stress": stress_features(natural_wav),
-           "cliff": natural_cliff, "wav": natural_wav}
+    ctx = build_prosody_ctx(natural_wav)
 
     paras = split_paragraphs(text)
     if len(paras) <= 1:
         pns = _generate_unit(text, ref_wav, ref_text, ctx, output_path,
                              fast=fast, takes=takes, on_progress=on_progress)
         normalize_speech_level(output_path)
-        _notify(on_progress, stage="done", pns=round(pns, 1))
+        import soundfile as sf
+        dur = sf.info(output_path).duration
+        _notify(on_progress, stage="done", pns=round(pns, 1),
+                paragraphs=[{"text": text, "start": 0.0,
+                             "end": round(dur, 3), "pns": round(pns, 1)}])
         return output_path, pns
 
     # 문단 배치: 각 문단이 동일 파이프라인(테이크→선별→조합)을 재사용
@@ -331,23 +396,35 @@ def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
     with tempfile.TemporaryDirectory() as wd:
         for pi, para in enumerate(paras):
             _notify(on_progress, stage="paragraph", i=pi + 1, n=len(paras))
+            wrapped = (None if on_progress is None else
+                       (lambda ev, _p=pi + 1, _n=len(paras):
+                        on_progress(dict(ev, para=_p, para_n=_n))))
             part = os.path.join(wd, f"para_{pi}.wav")
             pns = _generate_unit(para, ref_wav, ref_text, ctx, part,
                                  fast=fast, takes=takes,
-                                 on_progress=on_progress)
+                                 on_progress=wrapped)
             pns_list.append(pns)
             y, sr_out = sf.read(part, dtype="float32")
             if y.ndim > 1:
                 y = y.mean(axis=1)
             pieces.append(y)
-        joined = [pieces[0]]
-        for y in pieces[1:]:
-            gap = float(rng.uniform(*PARA_GAP))
-            joined += [np.zeros(int(sr_out * gap), dtype="float32"), y]
+        joined, t, paras_meta = [], 0.0, []
+        for i, y in enumerate(pieces):
+            if i:
+                gap = float(rng.uniform(*PARA_GAP))
+                joined.append(np.zeros(int(sr_out * gap), dtype="float32"))
+                t += gap
+            start = t
+            t += len(y) / sr_out
+            paras_meta.append({"text": paras[i], "start": round(start, 3),
+                               "end": round(t, 3),
+                               "pns": round(pns_list[i], 1)})
+            joined.append(y)
         sf.write(output_path, np.concatenate(joined), sr_out)
     normalize_speech_level(output_path)
     avg = float(np.mean(pns_list))
-    _notify(on_progress, stage="done", pns=round(avg, 1))
+    _notify(on_progress, stage="done", pns=round(avg, 1),
+            paragraphs=paras_meta)
     return output_path, avg
 
 
