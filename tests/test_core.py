@@ -197,6 +197,29 @@ def test_ending_style_vacuous_when_no_data():
     assert ending_style_score([], [1.0]) == 1.0
 
 
+# ---- 음절 강약 스타일 ----
+
+def test_stress_style_match_full_credit():
+    from core.prosody import stress_style_score
+    ref = {"peak_range": 17.5, "peak_valley": 17.0}
+    assert stress_style_score({"peak_range": 17.0, "peak_valley": 16.5},
+                              ref) == pytest.approx(1.0)
+
+
+def test_stress_style_flat_and_choppy_penalized():
+    from core.prosody import stress_style_score
+    ref = {"peak_range": 17.5, "peak_valley": 17.0}
+    # 실측 사례: 균일 강세(범위 13.5) + 과분절(대비 22.9) → 감점
+    assert stress_style_score({"peak_range": 13.5, "peak_valley": 22.9},
+                              ref) < 0.9
+
+
+def test_stress_style_vacuous_when_no_data():
+    from core.prosody import stress_style_score
+    assert stress_style_score(None, {"peak_range": 17.0,
+                                     "peak_valley": 17.0}) == 1.0
+
+
 # ---- 게이트 판정 ----
 
 def test_gates_pass():

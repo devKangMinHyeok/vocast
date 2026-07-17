@@ -147,6 +147,7 @@ def ensure_breath_pauses(wav_path, script):
 RATE_TOLERANCE = 0.15   # 조음속도 허용 편차 (±15%) — 벗어나면 선별 감점
 RATE_PENALTY = 15.0     # 편차 1.0당 PNS 감점량
 ENDING_PENALTY = 8.0    # 끝음 스타일 불일치(0~1) 최대 감점 — "끝음이 AI 같다" 대응
+STRESS_PENALTY = 6.0    # 음절 강약 불일치(0~1) 최대 감점 — 균일 강세/과분절 대응
 # 주의: 긴 대본의 청크 분할 생성은 실측으로 기각됨 — 2문장/4~5문장 청크 모두
 # 통짜 생성보다 나빴다 (PNS 77~81 vs 85, 페이스 6.7~7.9 vs 9.2음절/s).
 # 이 모델은 긴 글을 통째로 읽을 때 페이스·리듬이 가장 자연스럽다.
@@ -180,9 +181,11 @@ def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
         return out, None
 
     from .prosody import (ending_style_score, evaluate_prosody,
-                          final_f0_slopes, prosody_features)
+                          final_f0_slopes, prosody_features, stress_features,
+                          stress_style_score)
     natural_rate = prosody_features(natural_wav)["artic_rate"]
     natural_slopes = final_f0_slopes(natural_wav)
+    natural_stress = stress_features(natural_wav)
     best_sel, best_pns, best_path = -1e9, None, None
     with tempfile.TemporaryDirectory() as wd:
         for i in range(takes):
@@ -191,9 +194,11 @@ def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
             ensure_breath_pauses(take, text)  # 문장 경계 호흡 보장 후 채점
             r = evaluate_prosody(natural_wav, take, script=text)
             ending = ending_style_score(final_f0_slopes(take), natural_slopes)
+            stress = stress_style_score(stress_features(take), natural_stress)
             sel = (_selection_score(r["pns"], r["gen"]["artic_rate"],
                                     natural_rate)
-                   - ENDING_PENALTY * (1.0 - ending))
+                   - ENDING_PENALTY * (1.0 - ending)
+                   - STRESS_PENALTY * (1.0 - stress))
             if sel > best_sel:
                 best_sel, best_pns = sel, r["pns"]
                 if best_path:

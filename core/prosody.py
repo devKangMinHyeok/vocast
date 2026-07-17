@@ -288,6 +288,47 @@ def final_f0_slopes(wav_path):
     return slopes
 
 
+def stress_features(wav_path):
+    """음절 강약 특징: 피크 레벨 범위(강세 구조) + 피크-밸리 대비(분절 깊이).
+
+    문헌: 음절 prominence의 음향 상관물은 강도·에너지 범위·지속시간.
+    실측 변별 — 사람: 피크범위 17~18dB(강조/흘림의 대비가 큼), 대비 16~18dB.
+    클론: 피크범위 13~16dB(균일한 강세), 대비 20~23dB(모든 음절을 또박또박
+    과분절) → "음절 강약이 AI 같다"의 실체.
+    """
+    import librosa
+    from scipy.signal import find_peaks
+    y, sr = librosa.load(wav_path, sr=_SR, mono=True)
+    y, _ = librosa.effects.trim(y, top_db=35)
+    env = librosa.feature.rms(y=y, frame_length=400, hop_length=160)[0]
+    db = 20 * np.log10(np.maximum(env, 1e-6))
+    th = np.percentile(db, 90) - 30
+    peaks, _ = find_peaks(db, distance=9, height=th)  # 음절핵 근사 (≥90ms 간격)
+    if len(peaks) < 6:
+        return None
+    peak_db = db[peaks]
+    contrasts = []
+    for a, b in zip(peaks[:-1], peaks[1:]):
+        valley = db[a:b].min()
+        contrasts.append(((db[a] - valley) + (db[b] - valley)) / 2)
+    return {"peak_range": float(np.percentile(peak_db, 90)
+                                - np.percentile(peak_db, 10)),
+            "peak_valley": float(np.mean(contrasts))}
+
+
+def stress_style_score(gen_feats, ref_feats):
+    """강약 스타일 일치도 (0~1). 순수 함수.
+
+    피크범위는 부족을(강세 구조 없음), 피크-밸리는 과다를(과분절) 벌점.
+    """
+    if not gen_feats or not ref_feats:
+        return 1.0
+    s_range = dynamics_score(gen_feats["peak_range"], ref_feats["peak_range"])
+    s_valley = dynamics_score(ref_feats["peak_valley"],
+                              gen_feats["peak_valley"])  # 방향 반전: 과다 벌점
+    return float(0.5 * (s_range + s_valley))
+
+
 def ending_style_score(gen_slopes, ref_slopes, tolerance=2.0, floor=8.0):
     """끝음 스타일 일치도 (0~1): 끝음 기울기 중앙값의 화자 대비 차이.
 
