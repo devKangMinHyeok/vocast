@@ -37,6 +37,20 @@ def test_codec_args():
     assert audio_codec_args(".mov") == ["-c:a", "aac", "-b:a", "192k"]
 
 
+# ---- 음량 정규화 (정적 게인) ----
+
+def test_normalize_gain_reaches_target():
+    from core.audio import normalize_gain_db
+    # 발화 -36dB, 피크 -16dB → 목표 -19dB까지 +17dB, 피크 여유(14.5dB)로 제한
+    assert normalize_gain_db(-36.0, -16.0) == pytest.approx(14.5)
+
+
+def test_normalize_gain_respects_peak_ceiling():
+    from core.audio import normalize_gain_db
+    # 이미 피크가 상한이면 게인 0 이하
+    assert normalize_gain_db(-30.0, -1.5) == pytest.approx(0.0)
+
+
 # ---- CER 정규화 ----
 
 def test_normalize_ko_strips_punct_and_space():

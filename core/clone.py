@@ -148,11 +148,13 @@ def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
     사람 성우가 여러 테이크를 녹음해 고르듯, 북극성 지표로 자동 선별한다.
     PNS_TARGET을 넘으면 조기 종료. 운율 의존성이 없으면 단일 테이크 폴백.
     """
+    from .audio import normalize_speech_level
     from .prosody import prosody_deps_available
     if takes <= 1 or not prosody_deps_available():
         out = synthesize(text, ref_wav, ref_text, output_path, fast=fast)
         if prosody_deps_available():
             ensure_breath_pauses(out, text)
+            normalize_speech_level(out)
         return out, None
 
     from .prosody import evaluate_prosody
@@ -173,6 +175,7 @@ def synthesize_best(text, ref_wav, ref_text, natural_wav, output_path,
             if best_pns >= PNS_TARGET:
                 break
         os.replace(best_path, output_path)
+    normalize_speech_level(output_path)  # 배포 기준 음량으로 (정적 게인)
     return output_path, best_pns
 
 
