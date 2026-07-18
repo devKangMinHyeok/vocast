@@ -6,19 +6,16 @@
 - 작업(job): 생성을 백그라운드 스레드로 돌리고 진행 상황(테이크 오디션 점수)을
   실시간 노출. 완료물은 히스토리로 영구 저장 — 세션 분리·보관.
 
-저장 위치: ~/.noisecleaner/{profiles,history}/ (환경변수 NOISECLEANER_HOME으로 변경 가능)
+영속 접근은 전부 web.storage.store(어댑터)를 경유한다 — 업데이트 내구성과
+클라우드 전환을 위해. 저장 위치·백엔드는 web/storage.py 참고.
 """
-import json
 import os
 import shutil
 import threading
 import time
 import uuid
 
-HOME = os.environ.get("NOISECLEANER_HOME",
-                      os.path.expanduser("~/.noisecleaner"))
-PROFILES_DIR = os.path.join(HOME, "profiles")
-HISTORY_DIR = os.path.join(HOME, "history")
+from web import storage
 
 # 가이드 문장: 지표로 검증된 결함 차원(끝음 유형·억양 역동성·호흡·속도·강세)을
 # 고루 커버하도록 설계. 전체 낭독 약 90초.
@@ -50,28 +47,32 @@ JOBS = {}  # job_id → dict (메모리; 완료물은 히스토리에 영구 저
 
 
 def _ensure_dirs():
-    os.makedirs(PROFILES_DIR, exist_ok=True)
-    os.makedirs(HISTORY_DIR, exist_ok=True)
+    pass  # store가 쓰기·목록 시 디렉토리를 자동 생성 (호환용 no-op)
 
 
-def _meta_path(pid):
-    return os.path.join(PROFILES_DIR, pid, "meta.json")
+def _profile_dir(pid):
+    return storage.store.entity_dir("profiles", pid)
+
+
+def _history_dir(job_id):
+    return storage.store.entity_dir("history", job_id)
 
 
 def _load_meta(pid):
-    with open(_meta_path(pid), encoding="utf-8") as f:
-        return json.load(f)
+    m = storage.store.read_doc("profiles", pid)
+    if m is None:
+        raise FileNotFoundError(pid)
+    return m
 
 
 def _save_meta(pid, meta):
-    with open(_meta_path(pid), "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    storage.store.write_doc("profiles", pid, meta)
 
 
 def create_profile(name):
     _ensure_dirs()
     pid = uuid.uuid4().hex[:10]
-    os.makedirs(os.path.join(PROFILES_DIR, pid, "raw"), exist_ok=True)
+    os.makedirs(os.path.join(_profile_dir(pid), "raw"), exist_ok=True)
     meta = {"id": pid, "name": name.strip() or "내 목소리",
             "created": time.strftime("%Y-%m-%d %H:%M"),
             "recordings": 0, "ready": False, "stats": None}
@@ -80,7 +81,7 @@ def create_profile(name):
 
 
 def add_recording(pid, file_storage, idx):
-    raw = os.path.join(PROFILES_DIR, pid, "raw")
+    raw = os.path.join(_profile_dir(pid), "raw")
     ext = os.path.splitext(file_storage.filename or "r.webm")[1] or ".webm"
     file_storage.save(os.path.join(raw, f"{int(idx):02d}{ext}"))
     meta = _load_meta(pid)
@@ -91,7 +92,7 @@ def add_recording(pid, file_storage, idx):
 
 def add_source(pid, file_storage, denoise=True):
     """추가 소스(기존 음성/영상 파일) 등록 — 소스별 노이즈 제거 플래그 저장."""
-    sdir = os.path.join(PROFILES_DIR, pid, "sources")
+    sdir = os.path.join(_profile_dir(pid), "sources")
     os.makedirs(sdir, exist_ok=True)
     ext = os.path.splitext(file_storage.filename or "s.wav")[1] or ".wav"
     fname = f"{uuid.uuid4().hex[:8]}{ext}"
@@ -135,8 +136,7 @@ def _snapshot_version(pdir, meta, vnum):
              "denoised": meta.get("denoised", True),
              "built_with": meta.get("built_with"),
              "ref_wav": meta["ref_wav"], "natural_wav": meta["natural_wav"]}
-    with open(os.path.join(vdir, "version.json"), "w", encoding="utf-8") as f:
-        json.dump(entry, f, ensure_ascii=False, indent=2)
+    storage.store.write_json(os.path.join(vdir, "version.json"), entry)
     meta["version"] = vnum
     log = meta.setdefault("version_log", [])
     if not any(e.get("version") == vnum for e in log):
@@ -152,12 +152,11 @@ def rollback_profile(pid, version):
     스냅샷 파일은 그대로 두고 meta 포인터만 바꾸므로 즉시·무손실이며,
     다시 최신 버전으로 '롤포워드'도 같은 방법으로 가능하다.
     """
-    pdir = os.path.join(PROFILES_DIR, pid)
+    pdir = _profile_dir(pid)
     vfile = os.path.join(pdir, "versions", f"v{int(version)}", "version.json")
-    if not os.path.exists(vfile):
+    v = storage.store.read_json(vfile)
+    if v is None:
         raise ValueError(f"버전 v{version}이(가) 없습니다")
-    with open(vfile, encoding="utf-8") as f:
-        v = json.load(f)
     meta = _load_meta(pid)
     meta.update({"ref_wav": v["ref_wav"], "natural_wav": v["natural_wav"],
                  "ref_text": v["ref_text"], "stats": v["stats"],
@@ -188,7 +187,7 @@ def build_profile(pid, denoise=True, on_progress=None):
     from core.prosody import (final_f0_slopes, prosody_features,
                               stress_features)
 
-    pdir = os.path.join(PROFILES_DIR, pid)
+    pdir = _profile_dir(pid)
     meta = _archive_stats(_load_meta(pid))
     # 버전 개념 이전의 프로필: 빌드가 루트 자산을 덮어쓰기 전에 현재 상태를
     # v1 스냅샷으로 소급 보존 (빌드 실패·저품질 강화로부터 보호)
@@ -253,18 +252,16 @@ def build_profile(pid, denoise=True, on_progress=None):
 
 
 def list_profiles():
-    _ensure_dirs()
     out = []
-    for pid in sorted(os.listdir(PROFILES_DIR)):
-        try:
-            out.append(_load_meta(pid))
-        except (OSError, json.JSONDecodeError):
-            continue
+    for pid in storage.store.list_ids("profiles"):
+        m = storage.store.read_doc("profiles", pid)
+        if m is not None:
+            out.append(m)
     return out
 
 
 def delete_profile(pid):
-    shutil.rmtree(os.path.join(PROFILES_DIR, pid), ignore_errors=True)
+    storage.store.delete_entity("profiles", pid)
 
 
 def profile_paths(pid):
@@ -272,7 +269,7 @@ def profile_paths(pid):
     meta = _load_meta(pid)
     if not meta.get("ready"):
         return None
-    pdir = os.path.join(PROFILES_DIR, pid)
+    pdir = _profile_dir(pid)
     return (os.path.join(pdir, meta["ref_wav"]), meta["ref_text"],
             os.path.join(pdir, meta["natural_wav"]))
 
@@ -347,10 +344,7 @@ def _finish_job(job, out, t_start):
 
 
 def _persist_job(job, jdir=None):
-    jdir = jdir or os.path.join(HISTORY_DIR, job["id"])
-    os.makedirs(jdir, exist_ok=True)
-    with open(os.path.join(jdir, "meta.json"), "w", encoding="utf-8") as f:
-        json.dump(job, f, ensure_ascii=False, indent=2)
+    storage.store.write_doc("history", job["id"], job)
 
 
 def start_clone_job(text, fast, ref_path=None, profile_id=None,
@@ -368,7 +362,7 @@ def start_clone_job(text, fast, ref_path=None, profile_id=None,
     if profile_id:
         try:
             rate = (_load_meta(profile_id).get("stats") or {}).get("rate")
-        except (OSError, json.JSONDecodeError):
+        except (OSError, AttributeError):
             pass
     job["eta_sec"] = estimate_clone_eta(text, fast=fast, speech_rate=rate)
     with _LOCK:
@@ -377,7 +371,7 @@ def start_clone_job(text, fast, ref_path=None, profile_id=None,
     on_progress = _make_progress(job)
 
     def run():
-        jdir = os.path.join(HISTORY_DIR, job_id)
+        jdir = _history_dir(job_id)
         os.makedirs(jdir, exist_ok=True)
         out = os.path.join(jdir, "output.wav")
         t_start = time.time()
@@ -445,7 +439,7 @@ def start_regen_job(parent_id, index):
     on_progress = _make_progress(job)
 
     def run():
-        jdir = os.path.join(HISTORY_DIR, job_id)
+        jdir = _history_dir(job_id)
         os.makedirs(jdir, exist_ok=True)
         out = os.path.join(jdir, "output.wav")
         t_start = time.time()
@@ -475,7 +469,7 @@ def start_build_job(pid, denoise=True):
 
     meta = _load_meta(pid)  # 없으면 FileNotFoundError → 호출부 404
     _ensure_dirs()
-    pdir = os.path.join(PROFILES_DIR, pid)
+    pdir = _profile_dir(pid)
     total = 0.0
     raw = os.path.join(pdir, "raw")
     files = ([os.path.join(raw, f) for f in os.listdir(raw)
@@ -560,7 +554,7 @@ def start_performance_job(parent_id, index, rec_path, denoise=True):
     on_progress = _make_progress(job)
 
     def run():
-        jdir = os.path.join(HISTORY_DIR, job_id)
+        jdir = _history_dir(job_id)
         os.makedirs(jdir, exist_ok=True)
         out = os.path.join(jdir, "output.wav")
         t_start = time.time()
@@ -591,23 +585,20 @@ def rename_history(job_id, title):
     title = (title or "").strip()[:60]
     if not title:
         raise ValueError("이름이 비어 있습니다")
-    meta_p = os.path.join(HISTORY_DIR, job_id, "meta.json")
     with _LOCK:
         if job_id in JOBS:
             JOBS[job_id]["title"] = title
-    if os.path.exists(meta_p):
-        with open(meta_p, encoding="utf-8") as f:
-            meta = json.load(f)
+    meta = storage.store.read_doc("history", job_id)
+    if meta is not None:
         meta["title"] = title
-        with open(meta_p, "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
+        storage.store.write_doc("history", job_id, meta)
     return title
 
 
 def delete_history(job_id):
     with _LOCK:
         JOBS.pop(job_id, None)
-    shutil.rmtree(os.path.join(HISTORY_DIR, job_id), ignore_errors=True)
+    storage.store.delete_entity("history", job_id)
 
 
 def get_job(job_id):
@@ -615,28 +606,20 @@ def get_job(job_id):
         job = JOBS.get(job_id)
         if job:
             return dict(job)
-    meta = os.path.join(HISTORY_DIR, job_id, "meta.json")  # 서버 재시작 후
-    if os.path.exists(meta):
-        with open(meta, encoding="utf-8") as f:
-            return json.load(f)
-    return None
+    return storage.store.read_doc("history", job_id)  # 서버 재시작 후
 
 
 def job_output(job_id):
-    p = os.path.join(HISTORY_DIR, job_id, "output.wav")
+    p = os.path.join(storage.store.entity_dir("history", job_id, ensure=False),
+                     "output.wav")
     return p if os.path.exists(p) else None
 
 
 def list_history(limit=20):
-    _ensure_dirs()
     items = []
-    for jid in os.listdir(HISTORY_DIR):
-        meta = os.path.join(HISTORY_DIR, jid, "meta.json")
-        if os.path.exists(meta):
-            try:
-                with open(meta, encoding="utf-8") as f:
-                    items.append(json.load(f))
-            except (OSError, json.JSONDecodeError):
-                continue
+    for jid in storage.store.list_ids("history"):
+        meta = storage.store.read_doc("history", jid)
+        if meta is not None:
+            items.append(meta)
     items.sort(key=lambda x: x.get("created", ""), reverse=True)
     return items[:limit]

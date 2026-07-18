@@ -366,10 +366,34 @@ def test_guide_sentences_cover_prosody_dimensions():
         assert needed in focuses, f"가이드에 '{needed}' 유형 문장이 필요"
 
 
+def test_storage_adapter_local(tmp_path):
+    """저장소 어댑터: 문서·엔티티 디렉토리·설정 왕복 + 목록·삭제."""
+    from web.storage import LocalStorage
+    s = LocalStorage(str(tmp_path))
+    assert s.read_doc("profiles", "x") is None
+    s.write_doc("profiles", "x", {"id": "x", "n": 1})
+    assert s.read_doc("profiles", "x")["n"] == 1
+    assert s.exists("profiles", "x") and s.list_ids("profiles") == ["x"]
+    with open(s.entity_dir("profiles", "x") + "/blob.bin", "w") as f:
+        f.write("data")  # blob은 엔티티 디렉토리에
+    assert s.read_setting("rates", {}) == {}
+    s.write_setting("rates", {"clone_rtf": 12.0})
+    assert s.read_setting("rates")["clone_rtf"] == 12.0
+    s.delete_entity("profiles", "x")
+    assert not s.exists("profiles", "x") and s.list_ids("profiles") == []
+
+
+def test_storage_home_survives_swap(tmp_path):
+    """어댑터 인스턴스를 새로 만들어도(=앱 업데이트) 같은 홈이면 데이터 유지."""
+    from web.storage import LocalStorage
+    LocalStorage(str(tmp_path)).write_doc("history", "j", {"id": "j"})
+    assert LocalStorage(str(tmp_path)).read_doc("history", "j") == {"id": "j"}
+
+
 def test_profile_store_roundtrip(tmp_path, monkeypatch):
     import web.profiles as P
-    monkeypatch.setattr(P, "PROFILES_DIR", str(tmp_path / "profiles"))
-    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "history"))
+    import web.storage as S
+    monkeypatch.setattr(S, "store", S.LocalStorage(str(tmp_path)))
     meta = P.create_profile("테스트 목소리")
     assert meta["ready"] is False
     assert any(m["id"] == meta["id"] for m in P.list_profiles())
@@ -401,8 +425,8 @@ def test_splice_paragraphs_meta_shorter_replacement():
 
 def test_history_rename_and_delete(tmp_path, monkeypatch):
     import web.profiles as P
-    monkeypatch.setattr(P, "PROFILES_DIR", str(tmp_path / "profiles"))
-    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "history"))
+    import web.storage as S
+    monkeypatch.setattr(S, "store", S.LocalStorage(str(tmp_path)))
     jdir = tmp_path / "history" / "abc123"
     jdir.mkdir(parents=True)
     (jdir / "meta.json").write_text(
@@ -419,8 +443,8 @@ def test_history_rename_and_delete(tmp_path, monkeypatch):
 def test_regen_job_rejects_unfinished(tmp_path, monkeypatch):
     """문단 재생성은 완성작 + 문단 경계 + 프로필이 있어야 시작된다."""
     import web.profiles as P
-    monkeypatch.setattr(P, "PROFILES_DIR", str(tmp_path / "profiles"))
-    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "history"))
+    import web.storage as S
+    monkeypatch.setattr(S, "store", S.LocalStorage(str(tmp_path)))
     with pytest.raises(ValueError):
         P.start_regen_job("없는작업", 0)
     jdir = tmp_path / "history" / "j1"
@@ -435,8 +459,8 @@ def test_regen_job_rejects_unfinished(tmp_path, monkeypatch):
 def test_performance_job_rejects_bad_targets(tmp_path, monkeypatch):
     """연기 반영은 완성작 + 문단 정보가 있어야 시작된다."""
     import web.profiles as P
-    monkeypatch.setattr(P, "PROFILES_DIR", str(tmp_path / "profiles"))
-    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "history"))
+    import web.storage as S
+    monkeypatch.setattr(S, "store", S.LocalStorage(str(tmp_path)))
     with pytest.raises(ValueError):
         P.start_performance_job("없는작업", 0, str(tmp_path / "r.webm"))
     jdir = tmp_path / "history" / "j1"
@@ -563,8 +587,8 @@ def test_archive_stats_keeps_history():
 def test_profile_version_snapshot_and_rollback(tmp_path, monkeypatch):
     """빌드마다 자산이 versions/vN에 보존되고, 롤백하면 그 버전을 가리킨다."""
     import web.profiles as P
-    monkeypatch.setattr(P, "PROFILES_DIR", str(tmp_path / "profiles"))
-    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "history"))
+    import web.storage as S
+    monkeypatch.setattr(S, "store", S.LocalStorage(str(tmp_path)))
     pdir = tmp_path / "profiles" / "p1"
     pdir.mkdir(parents=True)
     (pdir / "ref_clean.wav").write_bytes(b"v1ref")
@@ -598,7 +622,8 @@ def test_profile_version_snapshot_and_rollback(tmp_path, monkeypatch):
 
 def test_dnjob_store_roundtrip(tmp_path, monkeypatch):
     import web.dnjobs as D
-    monkeypatch.setattr(D, "DN_DIR", str(tmp_path / "denoise"))
+    import web.storage as S
+    monkeypatch.setattr(S, "store", S.LocalStorage(str(tmp_path)))
     jdir = tmp_path / "denoise" / "dn1"
     jdir.mkdir(parents=True)
     (jdir / "meta.json").write_text(
@@ -618,7 +643,8 @@ def test_dnjob_store_roundtrip(tmp_path, monkeypatch):
 def test_rates_eta_estimates(tmp_path, monkeypatch):
     """ETA 산정: 대본 길이·모드에 비례하고, 실측이 EMA로 반영된다."""
     import web.rates as R
-    monkeypatch.setattr(R, "RATES_PATH", str(tmp_path / "rates.json"))
+    import web.storage as S
+    monkeypatch.setattr(S, "store", S.LocalStorage(str(tmp_path)))
     long_eta = R.estimate_clone_eta("안녕하세요. 반갑습니다. 오늘도 좋은 하루입니다.")
     assert 10 < long_eta < 600
     assert R.estimate_clone_eta("안녕하세요.", fast=True) < long_eta
@@ -635,15 +661,14 @@ def test_tasks_endpoint_merges_kinds(tmp_path, monkeypatch):
     import web.dnjobs as D
     import web.profiles as P
     from web.server import app
-    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "h"))
-    monkeypatch.setattr(P, "PROFILES_DIR", str(tmp_path / "p"))
-    monkeypatch.setattr(D, "DN_DIR", str(tmp_path / "d"))
-    (tmp_path / "h" / "a1").mkdir(parents=True)
-    (tmp_path / "h" / "a1" / "meta.json").write_text(
+    import web.storage as S
+    monkeypatch.setattr(S, "store", S.LocalStorage(str(tmp_path)))
+    (tmp_path / "history" / "a1").mkdir(parents=True)
+    (tmp_path / "history" / "a1" / "meta.json").write_text(
         '{"id":"a1","status":"generating","title":"클론","created":"2026-07-17 10:00"}',
         encoding="utf-8")
-    (tmp_path / "d" / "b1").mkdir(parents=True)
-    (tmp_path / "d" / "b1" / "meta.json").write_text(
+    (tmp_path / "denoise" / "b1").mkdir(parents=True)
+    (tmp_path / "denoise" / "b1" / "meta.json").write_text(
         '{"id":"b1","status":"done","title":"dn","created":"2026-07-17 11:00"}',
         encoding="utf-8")
     with app.test_client() as c:

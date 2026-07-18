@@ -6,25 +6,22 @@
 - 히스토리 보존 (결과 파일 + 미리듣기; 원본 미디어는 용량 절약을 위해
   미리듣기 추출 후 삭제)
 
-저장 위치: ~/.noisecleaner/denoise/<job>/ (프로필·클로닝과 같은 HOME)
+영속 접근은 web.storage.store(어댑터)를 경유한다 (프로필·클로닝과 동일).
+저장 위치·백엔드는 web/storage.py 참고.
 """
-import json
 import os
-import shutil
 import threading
 import time
 import uuid
 
-from web.profiles import HOME
+from web import storage
 
-DN_DIR = os.path.join(HOME, "denoise")
 _LOCK = threading.Lock()
 DNJOBS = {}  # job_id → dict (메모리; 완료물은 meta.json으로 영구 저장)
 
 
-def _persist(job, jdir):
-    with open(os.path.join(jdir, "meta.json"), "w", encoding="utf-8") as f:
-        json.dump(job, f, ensure_ascii=False, indent=2)
+def _persist(job, jdir=None):
+    storage.store.write_doc("denoise", job["id"], job)
 
 
 def start_denoise_job(file_storage, boost=0.0, mode="standard"):
@@ -37,10 +34,8 @@ def start_denoise_job(file_storage, boost=0.0, mode="standard"):
     from core.denoise import (denoise_report, dfn_available, run_denoise,
                               voice_similarity)
 
-    os.makedirs(DN_DIR, exist_ok=True)
     jid = uuid.uuid4().hex[:10]
-    jdir = os.path.join(DN_DIR, jid)
-    os.makedirs(jdir)
+    jdir = storage.store.entity_dir("denoise", jid)
     name = os.path.basename(file_storage.filename or "input.wav")
     base, ext = os.path.splitext(name)
     ext = ext.lower() or ".wav"
@@ -109,16 +104,12 @@ def get_dnjob(jid):
     with _LOCK:
         if jid in DNJOBS:
             return dict(DNJOBS[jid])
-    meta = os.path.join(DN_DIR, jid, "meta.json")  # 서버 재시작 후
-    if os.path.exists(meta):
-        with open(meta, encoding="utf-8") as f:
-            return json.load(f)
-    return None
+    return storage.store.read_doc("denoise", jid)  # 서버 재시작 후
 
 
 def dnjob_path(jid, kind):
     """kind: file(결과 다운로드) | orig(원본 미리듣기) | clean(결과 미리듣기)"""
-    jdir = os.path.join(DN_DIR, jid)
+    jdir = storage.store.entity_dir("denoise", jid, ensure=False)
     if kind == "orig":
         p = os.path.join(jdir, "orig.m4a")
     elif kind == "clean":
@@ -133,17 +124,11 @@ def dnjob_path(jid, kind):
 
 
 def list_dnjobs(limit=20):
-    if not os.path.isdir(DN_DIR):
-        return []
     items = []
-    for jid in os.listdir(DN_DIR):
-        meta = os.path.join(DN_DIR, jid, "meta.json")
-        if os.path.exists(meta):
-            try:
-                with open(meta, encoding="utf-8") as f:
-                    items.append(json.load(f))
-            except (OSError, json.JSONDecodeError):
-                continue
+    for jid in storage.store.list_ids("denoise"):
+        meta = storage.store.read_doc("denoise", jid)
+        if meta is not None:
+            items.append(meta)
     items.sort(key=lambda x: x.get("created", ""), reverse=True)
     return items[:limit]
 
@@ -151,4 +136,4 @@ def list_dnjobs(limit=20):
 def delete_dnjob(jid):
     with _LOCK:
         DNJOBS.pop(jid, None)
-    shutil.rmtree(os.path.join(DN_DIR, jid), ignore_errors=True)
+    storage.store.delete_entity("denoise", jid)

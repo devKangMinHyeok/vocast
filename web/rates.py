@@ -4,15 +4,11 @@
 작업이 끝날 때마다 실측 속도를 지수이동평균(EMA)으로 반영하므로,
 쓸수록 이 기기·이 설정에 맞게 정확해진다.
 
-저장: ~/.noisecleaner/rates.json
+저장: 저장소 어댑터의 설정(setting) "rates" — web/storage.py 참고.
 """
-import json
-import os
 import re
 
-from web.profiles import HOME
-
-RATES_PATH = os.path.join(HOME, "rates.json")
+from web import storage
 
 # 초기값은 이 프로젝트의 실측에서 가져온 보수적 추정
 DEFAULTS = {
@@ -26,11 +22,7 @@ DEFAULTS = {
 
 
 def get_rates():
-    try:
-        with open(RATES_PATH, encoding="utf-8") as f:
-            return {**DEFAULTS, **json.load(f)}
-    except (OSError, json.JSONDecodeError):
-        return dict(DEFAULTS)
+    return {**DEFAULTS, **(storage.store.read_setting("rates", {}) or {})}
 
 
 def update_rate(key, value, alpha=0.4):
@@ -39,9 +31,7 @@ def update_rate(key, value, alpha=0.4):
         return
     rates = get_rates()
     rates[key] = round((1 - alpha) * rates.get(key, value) + alpha * value, 3)
-    os.makedirs(HOME, exist_ok=True)
-    with open(RATES_PATH, "w", encoding="utf-8") as f:
-        json.dump(rates, f, ensure_ascii=False, indent=1)
+    storage.store.write_setting("rates", rates)
 
 
 def estimate_clone_eta(text, fast=False, speech_rate=None):
