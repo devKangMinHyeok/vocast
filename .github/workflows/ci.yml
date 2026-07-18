@@ -17,7 +17,10 @@ jobs:
           python-version: "3.12"
       # 전체 의존성(mlx·torch)은 Apple Silicon 전용이라 ubuntu에서 설치 불가.
       # 유닛 테스트는 heavy 모듈을 importorskip으로 건너뛰므로 경량 셋만 설치.
+      # 전용 venv에 설치하고 --no-project로 실행 (프로젝트 sync가 mlx를 끌지 않게).
       - name: Install light test deps
-        run: uv pip install --system flask pytest numpy
+        run: |
+          uv venv --python 3.12
+          uv pip install flask pytest numpy
       - name: Unit tests
-        run: pytest tests -q
+        run: uv run --no-project pytest tests -q
