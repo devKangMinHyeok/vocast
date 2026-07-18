@@ -12,6 +12,9 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const nextConfig = {
   transpilePackages: ["@timbre/design-system"],
   images: { unoptimized: true },
+  // public/ 정적 에셋(블로그 이미지 등)을 basePath 아래에서도 찾도록 노출.
+  // 일반 <img>/CSS url()은 basePath가 자동 적용되지 않으므로 asset() 헬퍼로 접두.
+  env: { NEXT_PUBLIC_BASE_PATH: isPages ? "/vocast" : "" },
   // 이 모노레포 루트를 트레이싱 루트로 고정 (상위 docusaurus-blog lockfile 오탐 방지)
   outputFileTracingRoot: repoRoot,
   ...(isPages

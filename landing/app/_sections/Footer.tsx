@@ -1,31 +1,34 @@
 import * as React from "react";
 import { Logo } from "@timbre/design-system";
 import { Container } from "../_ui/Container";
+import { asset } from "../../lib/asset";
 
 const FEAT = '"calt","kern","liga","ss03"';
+const HOME = asset("/");
 
 const COLUMNS: { title: string; links: { label: string; href: string }[] }[] = [
   {
     title: "Product",
     links: [
-      { label: "Features", href: "#features" },
-      { label: "Pricing", href: "#pricing" },
-      { label: "AI (MCP)", href: "#mcp" },
-      { label: "Privacy", href: "#privacy" },
+      { label: "Features", href: `${HOME}#features` },
+      { label: "Pricing", href: `${HOME}#pricing` },
+      { label: "AI (MCP)", href: `${HOME}#mcp` },
+      { label: "Privacy", href: `${HOME}#privacy` },
     ],
   },
   {
     title: "Resources",
     links: [
+      { label: "Blog", href: asset("/blog/") },
       { label: "Quality methodology", href: "https://github.com/devKangMinHyeok/vocast/blob/main/docs/QUALITY.md" },
       { label: "GitHub", href: "https://github.com/devKangMinHyeok/vocast" },
-      { label: "Browser demo", href: "./demo/" },
+      { label: "Browser demo", href: asset("/demo/") },
     ],
   },
   {
     title: "Company",
     links: [
-      { label: "Refund policy", href: "#pricing" },
+      { label: "Refund policy", href: `${HOME}#pricing` },
       { label: "Consent & usage", href: "#" },
     ],
   },

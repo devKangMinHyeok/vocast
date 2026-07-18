@@ -2,18 +2,31 @@
 import * as React from "react";
 import { Logo, Button } from "@timbre/design-system";
 import { Icon } from "../_ui/Icon";
+import { asset } from "../../lib/asset";
 
+const HOME = asset("/"); // "/vocast/" on Pages, "/" locally
 const LINKS = [
-  { label: "Features", href: "#features" },
-  { label: "Quality", href: "#quality" },
-  { label: "Privacy", href: "#privacy" },
-  { label: "AI (MCP)", href: "#mcp" },
-  { label: "Pricing", href: "#pricing" },
+  { label: "Features", href: `${HOME}#features` },
+  { label: "Quality", href: `${HOME}#quality` },
+  { label: "Privacy", href: `${HOME}#privacy` },
+  { label: "AI (MCP)", href: `${HOME}#mcp` },
+  { label: "Pricing", href: `${HOME}#pricing` },
+  { label: "Blog", href: asset("/blog/") },
 ];
 const FEAT = '"calt","kern","liga","ss03"';
 const GITHUB = "https://github.com/devKangMinHyeok/vocast";
 
-function NavLink({ href, children, onClick }: { href: string; children: React.ReactNode; onClick?: () => void }) {
+function NavLink({
+  href,
+  children,
+  onClick,
+  active,
+}: {
+  href: string;
+  children: React.ReactNode;
+  onClick?: () => void;
+  active?: boolean;
+}) {
   return (
     <a
       href={href}
@@ -22,7 +35,8 @@ function NavLink({ href, children, onClick }: { href: string; children: React.Re
         font: "500 14px/1 var(--rc-font-sans)",
         letterSpacing: ".2px",
         fontFeatureSettings: FEAT,
-        color: "var(--rc-body)",
+        color: active ? "var(--rc-ink)" : "var(--rc-body)",
+        background: active ? "#1a1b1c" : "transparent",
         padding: "8px 12px",
         borderRadius: "var(--rc-radius-md)",
         transition: "background-color .15s ease, color .15s ease",
@@ -33,8 +47,8 @@ function NavLink({ href, children, onClick }: { href: string; children: React.Re
         e.currentTarget.style.color = "var(--rc-ink)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = "var(--rc-body)";
+        e.currentTarget.style.background = active ? "#1a1b1c" : "transparent";
+        e.currentTarget.style.color = active ? "var(--rc-ink)" : "var(--rc-body)";
       }}
     >
       {children}
@@ -42,7 +56,7 @@ function NavLink({ href, children, onClick }: { href: string; children: React.Re
   );
 }
 
-export function Nav() {
+export function Nav({ active }: { active?: string } = {}) {
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [mobile, setMobile] = React.useState(false);
 
@@ -75,7 +89,7 @@ export function Nav() {
           WebkitBackdropFilter: "blur(14px)",
         }}
       >
-        <a href="#top" style={{ display: "inline-flex", flex: "none" }} aria-label="Vocast home">
+        <a href={HOME} style={{ display: "inline-flex", flex: "none" }} aria-label="Vocast home">
           <Logo height={22} wordmark="Vocast" />
         </a>
         <div style={{ flex: 1 }} />
@@ -84,14 +98,14 @@ export function Nav() {
           <>
             <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
               {LINKS.map((l) => (
-                <NavLink key={l.href} href={l.href}>
+                <NavLink key={l.href} href={l.href} active={active === l.label}>
                   {l.label}
                 </NavLink>
               ))}
             </div>
             <span style={{ width: 1, height: 22, background: "var(--rc-hairline)" }} />
             <NavLink href={GITHUB}>GitHub</NavLink>
-            <Button variant="primary" size="sm" as="a" href="#pricing">
+            <Button variant="primary" size="sm" as="a" href={`${HOME}#pricing`}>
               Buy
             </Button>
           </>
@@ -132,7 +146,7 @@ export function Nav() {
           }}
         >
           {LINKS.map((l) => (
-            <NavLink key={l.href} href={l.href} onClick={() => setMenuOpen(false)}>
+            <NavLink key={l.href} href={l.href} active={active === l.label} onClick={() => setMenuOpen(false)}>
               {l.label}
             </NavLink>
           ))}
@@ -140,7 +154,7 @@ export function Nav() {
             GitHub
           </NavLink>
           <div style={{ marginTop: 4 }}>
-            <Button variant="primary" as="a" href="#pricing" style={{ width: "100%" }} onClick={() => setMenuOpen(false)}>
+            <Button variant="primary" as="a" href={`${HOME}#pricing`} style={{ width: "100%" }} onClick={() => setMenuOpen(false)}>
               Buy — $49
             </Button>
           </div>
