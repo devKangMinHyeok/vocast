@@ -11,10 +11,10 @@ cask "vocast" do
   version "0.1.0"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
-  url "https://github.com/devKangMinHyeok/denoise-app/releases/download/v#{version}/Vocast-macos-arm64.tar.gz"
+  url "https://github.com/devKangMinHyeok/vocast/releases/download/v#{version}/Vocast-macos-arm64.tar.gz"
   name "Noise Cleaner"
   desc "크리에이터를 위한 로컬 음성 스튜디오 — 노이즈 제거 + 보이스 클로닝"
-  homepage "https://github.com/devKangMinHyeok/denoise-app"
+  homepage "https://github.com/devKangMinHyeok/vocast"
 
   depends_on arch: :arm64
   depends_on macos: ">= :sonoma"

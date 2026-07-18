@@ -1,16 +1,17 @@
-# 🎙️ Noise Cleaner (denoise-app)
+# 🎙️ Vocast
 
-[![CI](https://github.com/devKangMinHyeok/denoise-app/actions/workflows/ci.yml/badge.svg)](https://github.com/devKangMinHyeok/denoise-app/actions/workflows/ci.yml)
-[![Quality Gate](https://github.com/devKangMinHyeok/denoise-app/actions/workflows/quality.yml/badge.svg)](https://github.com/devKangMinHyeok/denoise-app/actions/workflows/quality.yml)
+[![CI](https://github.com/devKangMinHyeok/vocast/actions/workflows/ci.yml/badge.svg)](https://github.com/devKangMinHyeok/vocast/actions/workflows/ci.yml)
+[![Quality Gate](https://github.com/devKangMinHyeok/vocast/actions/workflows/quality.yml/badge.svg)](https://github.com/devKangMinHyeok/vocast/actions/workflows/quality.yml)
 
-영상·음성에서 **목소리는 그대로 두고 배경 소음(백색소음, 팬 소리 등)만 제거**하는 로컬 도구.
-모든 처리가 내 컴퓨터 안에서만 이루어지고, 원본 파일은 절대 수정되지 않는다.
+크리에이터를 위한 **로컬 음성 스튜디오**. 한 번 등록한 **내 목소리로 원고를 자연스럽게 낭독**하고
+(보이스 클로닝), 직접 녹음한 소스의 **배경 소음도 함께 제거**한다. 모든 처리가 내 컴퓨터 안에서만
+이루어지고, 목소리 데이터는 서버로 올라가지 않는다.
 
 CLI · 로컬 웹 앱 · 맥 앱, 세 가지 방식으로 쓸 수 있다.
 
 ## 🌐 웹에서 바로 쓰기 (설치 불필요)
 
-**https://devkangminhyeok.github.io/denoise-app/**
+**https://devkangminhyeok.github.io/vocast/**
 
 ffmpeg.wasm으로 브라우저 안에서 직접 처리한다 — 파일이 서버로 전송되지 않고,
 내 컴퓨터(브라우저) 밖으로 나가지 않는다. 최초 접속 시 변환 엔진(약 30MB)을 한 번 내려받는다.

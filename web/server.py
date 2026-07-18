@@ -24,7 +24,7 @@ from core.clone import clone_available, clone_voice  # noqa: E402
 from core.denoise import run_denoise  # noqa: E402
 from web import dnjobs, profiles  # noqa: E402
 
-WORK = os.path.join(tempfile.gettempdir(), "denoise-app-work")
+WORK = os.path.join(tempfile.gettempdir(), "vocast-work")
 os.makedirs(WORK, exist_ok=True)
 
 MEDIA_EXTS = {".mov", ".mp4", ".m4v", ".mkv", ".wav", ".m4a", ".mp3", ".aac"}

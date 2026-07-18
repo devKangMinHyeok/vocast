@@ -10,7 +10,7 @@ quarantine 딱지가 붙지 않아 **코드 서명·공증 없이도 Gatekeeper 
 ### 1) curl 한 줄
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/devKangMinHyeok/denoise-app/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/devKangMinHyeok/vocast/main/scripts/install.sh | bash
 ```
 
 `scripts/install.sh`가: 플랫폼 확인(arm64 macOS) → 번들 tar.gz 다운로드 →

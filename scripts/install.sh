@@ -12,7 +12,7 @@
 #   NC_BIN     : CLI 심링크 위치 (기본 ~/.local/bin)
 set -euo pipefail
 
-REPO="devKangMinHyeok/denoise-app"
+REPO="devKangMinHyeok/vocast"
 NC_RELEASE="${NC_RELEASE:-latest}"
 NC_PREFIX="${NC_PREFIX:-$HOME/Applications/Vocast}"
 NC_BIN="${NC_BIN:-$HOME/.local/bin}"

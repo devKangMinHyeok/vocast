@@ -1,4 +1,4 @@
-"""denoise-app 핵심 로직 패키지.
+"""Vocast 핵심 로직 패키지.
 
 - core.audio   : ffmpeg 래퍼 (스트림 검사, 오디오 추출)
 - core.denoise : 배경 소음 제거 파이프라인 (RNNoise)
