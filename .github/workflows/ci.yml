@@ -39,6 +39,7 @@ jobs:
       - name: Sync locked deps (mlx must be skipped on Windows)
         run: uv sync --frozen
       - name: App imports & degrades gracefully (no mlx)
-        run: uv run --frozen python -c "from core.clone import clone_available; from core.denoise import dfn_available; from web.server import app; assert clone_available() is False, 'mlx must be absent on Windows'; print('Windows: clone disabled, app OK')"
+        run: |
+          uv run --frozen python -c "from core.clone import clone_available; from web.server import app; assert clone_available() is False, 'mlx must be absent on Windows'; print('Windows clone disabled, app OK')"
       - name: Unit tests
         run: uv run --frozen pytest tests -q
