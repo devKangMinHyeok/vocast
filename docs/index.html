@@ -402,19 +402,32 @@
   <div class="wrap">
     <span class="kicker grad-text">AI-Native · MCP</span>
     <h2 class="sec">Claude가 이 앱을<br><span class="g">직접 조종합니다</span></h2>
-    <p class="sec-sub">모든 기능이 로컬 MCP로 열려 있습니다. Claude·Codex 같은 AI 에이전트에게
-    말로 시키면, 에이전트가 앱을 대신 조작합니다.</p>
+    <p class="sec-sub">앱이 로컬 MCP 서버를 제공합니다. Claude Desktop·Claude Code·Codex 같은
+    에이전트에 한 줄 등록하면, 말로 시키는 대로 아래 도구들을 알아서 호출합니다.</p>
     <div class="chat">
       <div class="head"><span class="g">●</span><span>Claude ↔ 노이즈 클리너 (로컬 MCP)</span></div>
       <div class="body">
-        <div class="msg user">어제 찍은 영상 노이즈 제거하고, 인트로 나레이션은 내 프로필로
-          다시 뽑아줘. 2번 문단은 좀 더 밝은 톤으로.</div>
+        <div class="msg user">바탕화면 인터뷰.mov 노이즈 제거하고, 그 대본을 내 목소리로 읽어줘.</div>
         <div class="msg ai">네, 진행할게요.
-          <span class="tool">▸ denoise(영상.mp4, mode=standard) — 발화 손실 0.0% ✓</span>
-          <span class="tool">▸ clone(원고, profile=내목소리) — PNS 84.2</span>
-          <span class="tool">▸ regen_paragraph(2) — 새 버전 v2 저장</span>
-          완료됐습니다. 2번 문단은 v2로 갈아끼웠고, 이전 버전은 라이브러리에 남아 있어요.</div>
+          <span class="tool">▸ denoise("인터뷰.mov", mode=standard) — 발화 손실 0.0% ✓</span>
+          <span class="tool">▸ list_voice_profiles() — "유튭" 프로필 선택</span>
+          <span class="tool">▸ clone_voice(text=…, profile_id="유튭") — PNS 84.2</span>
+          완료됐습니다. 노이즈 제거본과 클론 나레이션을 만들었어요.</div>
       </div>
+    </div>
+    <div class="feats" style="margin-top:40px">
+      <div class="feat card"><span class="tag grad-text">TOOL</span>
+        <h3>denoise</h3><p>파일 노이즈 제거 (표준/재합성) + 품질 리포트</p></div>
+      <div class="feat card"><span class="tag grad-text">TOOL</span>
+        <h3>clone_voice</h3><p>텍스트를 지정 목소리로 낭독 생성 (프로필/참조 파일)</p></div>
+      <div class="feat card"><span class="tag grad-text">TOOL</span>
+        <h3>list_voice_profiles</h3><p>등록된 보이스 프로필 목록</p></div>
+      <div class="feat card"><span class="tag grad-text">TOOL</span>
+        <h3>list_history</h3><p>최근 생성 작업 기록 조회</p></div>
+      <div class="feat card"><span class="tag grad-text">TOOL</span>
+        <h3>health</h3><p>사용 가능한 기능·엔진 상태</p></div>
+      <div class="feat card" style="display:flex; align-items:center; justify-content:center">
+        <p style="color:var(--sub); font-size:.9rem; text-align:center">전부 로컬 stdio —<br>네트워크·클라우드 불필요</p></div>
     </div>
   </div>
 </section>
