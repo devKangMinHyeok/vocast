@@ -99,9 +99,26 @@ fi
 echo "▸ uv 바이너리 동봉 (엔진 업데이트·재빌드용, 런타임 필수 아님)"
 mkdir -p "$RT/bin"; cp "$(command -v uv)" "$RT/bin/uv"
 
-echo "▸ 런처 생성"
+echo "▸ 런처 생성 (더블클릭용 .command + CLI용 bin/noise-cleaner)"
 cp "$ROOT/scripts/launcher.command" "$DIST/노이즈클리너 실행.command"
 chmod +x "$DIST/노이즈클리너 실행.command"
+# CLI 런처: curl 설치·Homebrew cask가 PATH에 심링크한다. 심링크로 불려도
+# 자기 실제 위치(번들 루트)를 찾도록 readlink로 해석한다.
+mkdir -p "$DIST/bin"
+cat > "$DIST/bin/noise-cleaner" <<'LAUNCH'
+#!/bin/bash
+set -e
+# 심링크(상대·절대)를 끝까지 따라 실제 위치 → 번들 루트(bin의 부모)
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+BUNDLE="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+exec "$BUNDLE/노이즈클리너 실행.command" "$@"
+LAUNCH
+chmod +x "$DIST/bin/noise-cleaner"
 
 SIZE=$(du -sh "$DIST" | cut -f1)
 echo
