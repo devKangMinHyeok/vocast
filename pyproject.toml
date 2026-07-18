@@ -7,10 +7,14 @@ requires-python = ">=3.12,<3.13"
 # 메인 환경(웹 앱 + 클로닝 + 노이즈 제거 오케스트레이션)에 필요한 전부.
 # DFN·재합성 엔진은 의존성 충돌(구버전 torch/deepspeed) 때문에 전용 venv로
 # 분리 설치한다 (scripts/install_dfn.sh, scripts/install_resynth.sh).
+#
+# mlx-*는 Apple Silicon 전용(Metal). Windows·Intel·Linux에서는 설치되지 않으며
+# 그 경우 보이스 클로닝 기능이 비활성(clone_available()==False)되고 노이즈
+# 제거·재합성만 동작한다. 플랫폼 마커로 조건부 설치 → 타 OS에서 uv sync 성공.
 dependencies = [
     "flask>=3.1",
-    "mlx-audio>=0.4.5",
-    "mlx-whisper>=0.4.3",
+    "mlx-audio>=0.4.5; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-whisper>=0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "librosa>=0.11",
     "soundfile>=0.14",
     "torch>=2.13",

@@ -23,3 +23,22 @@ jobs:
         run: uv pip install flask pytest numpy
       - name: Unit tests
         run: uv run --no-project pytest tests -q
+
+  # 크로스플랫폼 검증: Windows에서 잠긴 의존성이 실제로 풀리는지
+  # (mlx는 플랫폼 마커로 조건부 → Windows에선 자동 제외되어야 함).
+  # 앱이 mlx 없이 import되고 축소 기능만 활성인지 확인.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Sync locked deps (mlx must be skipped on Windows)
+        run: uv sync --frozen
+      - name: App imports & degrades gracefully (no mlx)
+        run: uv run --frozen python -c "from core.clone import clone_available; from core.denoise import dfn_available; from web.server import app; assert clone_available() is False, 'mlx must be absent on Windows'; print('Windows: clone disabled, app OK')"
+      - name: Unit tests
+        run: uv run --frozen pytest tests -q

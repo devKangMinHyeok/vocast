@@ -391,7 +391,18 @@ $('tabClone').onclick = () => showTab('cl');
 $('tabVoice').onclick = () => showTab('vc');
 
 fetch('/api/health').then(r => r.json()).then(h => {
-  if (!h.clone) { $('tabClone').disabled = $('tabVoice').disabled = true; }
+  if (!h.clone) {
+    $('tabClone').disabled = $('tabVoice').disabled = true;
+    // 왜 비활성인지 안내 (Apple Silicon 전용 기능)
+    const why = h.apple_silicon
+      ? '보이스 클로닝 엔진(mlx)이 설치되어 있지 않습니다.'
+      : '보이스 클로닝은 Apple Silicon Mac에서만 지원됩니다. 이 기기(' + (h.platform || '?') + ')에서는 노이즈 제거만 사용할 수 있어요.';
+    const note = document.createElement('div');
+    note.className = 'notice';
+    note.style.cssText = 'margin-top:12px';
+    note.innerHTML = 'ℹ️ ' + why;
+    document.querySelector('nav').after(note);
+  }
 }).catch(() => {});
 
 // ---- 공용 ----

@@ -40,10 +40,13 @@ def index():
 
 @app.get("/api/health")
 def health():
+    import platform
     from core.denoise import dfn_available, resynth_available
+    is_apple = platform.system() == "Darwin" and platform.machine() == "arm64"
     return jsonify(ok=True, denoise=True, clone=clone_available(),
                    denoise_engine="dfn-hybrid" if dfn_available() else "rnnoise",
-                   resynth=resynth_available())
+                   resynth=resynth_available(),
+                   platform=platform.system(), apple_silicon=is_apple)
 
 
 def _save_upload(f):
