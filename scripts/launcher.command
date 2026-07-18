@@ -11,6 +11,10 @@ export RESYNTH_PYTHON="$RT/.venv-re/bin/python3"
 # 사용자 데이터(프로필·작업 기록)는 홈에 (번들을 지워도 보존)
 : "${NOISECLEANER_HOME:=$HOME/.noisecleaner}"; export NOISECLEANER_HOME
 
+# 오프라인 모델 동봉본이 있으면 그것을 캐시로 사용 (네트워크 불필요)
+[ -d "$BUNDLE/models/hf" ]    && export HF_HOME="$BUNDLE/models/hf"
+[ -d "$BUNDLE/models/torch" ] && export TORCH_HOME="$BUNDLE/models/torch"
+
 PORT=8756
 echo "노이즈 클리너를 시작합니다… (최초 실행 시 음성 모델을 내려받습니다)"
 cd "$BUNDLE"

@@ -129,8 +129,35 @@ dist/NoiseCleaner/
 | 보이스 클로닝(mlx/whisper/TTS) | 동작 ✓ |
 | 사용된 파이썬 / ffmpeg | 번들 내부 (시스템 아님) ✓ |
 
-런타임에 다운로드되는 것은 음성 모델뿐(최초 1회, 온라인). 완전 오프라인
-배포는 모델까지 번들에 넣는 옵션(`--with-models`)이 다음 단계.
+### 완전 오프라인 배포 (`--with-models`)
+
+```bash
+bash scripts/build_bundle.sh --with-models   # → 약 11GB, 네트워크 불필요
+```
+
+런타임 모델까지 전부 번들에 넣어 **네트워크 0으로** 판매·실행 가능:
+
+| 모델 | 용도 | 동봉 방식 |
+|---|---|---|
+| Qwen3-TTS 1.7B/0.6B-8bit | 클로닝 | HF 캐시 → `models/hf` |
+| whisper large-v3-turbo / base | 참조 받아쓰기 / 채점·가사 | HF 캐시 → `models/hf` |
+| ResembleAI/resemble-enhance | 재합성 | HF 캐시 → `models/hf` |
+| UTMOS (tarepan/SpeechMOS) | PNS 북극성 채점 | torch.hub → `models/torch` |
+| DeepFilterNet3 · Resemblyzer | 노이즈 제거 · 화자 유사도 | 파이썬 패키지에 동봉 |
+| RNNoise | 표준 노이즈 제거 | `models/` (리포 포함) |
+
+런처가 `HF_HOME`·`TORCH_HOME`을 번들 캐시로 지정한다.
+
+**완전 오프라인 검증 (실측):** 번들을 새 경로로 옮기고
+`env -i PATH=/usr/bin:/bin HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`,
+빈 HOME(공유 캐시 차단)으로:
+
+| 항목 | 결과 |
+|---|---|
+| UTMOS 로드 (네트워크 강제 차단) | ✓ |
+| 서버 클론 잡 (2테이크, PNS·가사 채점) | PNS 77.1 · 가사 3단어 ✓ |
+| 재합성 (resemble-enhance) | ✓ |
+| CLI 클론 · 노이즈 제거 | ✓ |
 
 - **Apple Silicon 전용** — mlx가 Metal을 쓰므로 Intel Mac·타 OS 미지원(제품 사양).
 - **서명·공증** — 배포 시 codesign + notarize가 남은 단계(더블클릭 Gatekeeper 통과용).

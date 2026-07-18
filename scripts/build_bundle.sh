@@ -15,6 +15,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist/NoiseCleaner"
 RT="$DIST/runtime"
+WITH_MODELS=0
+[ "${1:-}" = "--with-models" ] && WITH_MODELS=1
 
 command -v uv >/dev/null 2>&1 || { echo "빌드에는 uv 필요"; exit 1; }
 PY312_SRC="$(dirname "$(dirname "$(uv python find 3.12)")")"
@@ -63,6 +65,37 @@ cp "$ROOT/denoise.py" "$ROOT/evaluate.py" "$ROOT/pyproject.toml" \
    "$ROOT/uv.lock" "$ROOT/README.md" "$ROOT/PORTABILITY.md" "$DIST/"
 find "$DIST" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
 
+if [ "$WITH_MODELS" = "1" ]; then
+  echo "▸ 오프라인 모델 동봉 (--with-models)"
+  HFB="$DIST/models/hf/hub"; mkdir -p "$HFB"
+  HFCACHE="$HOME/.cache/huggingface/hub"
+  REPOS="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit
+mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit
+mlx-community/whisper-large-v3-turbo
+mlx-community/whisper-base-mlx"
+  for repo in $REPOS; do
+    dir="models--${repo//\//--}"
+    if [ -d "$HFCACHE/$dir" ]; then
+      echo "  · 캐시 재사용: $repo"; cp -R "$HFCACHE/$dir" "$HFB/"
+    else
+      echo "  · 다운로드: $repo"
+      HF_HOME="$DIST/models/hf" "$RT/.venv/bin/python" -c \
+        "from huggingface_hub import snapshot_download; snapshot_download('$repo')"
+    fi
+  done
+  # resemble-enhance: enhancer_stage2만
+  redir="models--ResembleAI--resemble-enhance"
+  if [ -d "$HFCACHE/$redir" ]; then cp -R "$HFCACHE/$redir" "$HFB/"; else
+    HF_HOME="$DIST/models/hf" "$RT/.venv/bin/python" -c \
+      "from huggingface_hub import snapshot_download; snapshot_download('ResembleAI/resemble-enhance', allow_patterns=['enhancer_stage2/*'])"; fi
+  # UTMOS (torch.hub) — PNS 북극성 점수용
+  echo "  · UTMOS (torch.hub)"
+  TORCH_HOME="$DIST/models/torch" "$RT/.venv/bin/python" -c \
+    "import torch; torch.hub.load('tarepan/SpeechMOS:v1.2.0','utmos22_strong',trust_repo=True,skip_validation=True)" \
+    2>/dev/null || cp -R "$HOME/.cache/torch" "$DIST/models/torch"
+  echo "  (DFN·Resemblyzer 모델은 패키지 동봉, RNNoise는 models/ 에 포함)"
+fi
+
 echo "▸ uv 바이너리 동봉 (엔진 업데이트·재빌드용, 런타임 필수 아님)"
 mkdir -p "$RT/bin"; cp "$(command -v uv)" "$RT/bin/uv"
 
@@ -74,4 +107,8 @@ SIZE=$(du -sh "$DIST" | cut -f1)
 echo
 echo "✅ 번들 완성: $DIST  ($SIZE)"
 echo "   더블클릭: '$DIST/노이즈클리너 실행.command'"
-echo "   (모델은 최초 실행 시 자동 다운로드 — 오프라인 배포는 --with-models 예정)"
+if [ "$WITH_MODELS" = "1" ]; then
+  echo "   완전 오프라인 — 모델까지 동봉됨. 네트워크 없이 바로 실행."
+else
+  echo "   모델은 최초 실행 시 자동 다운로드 (온라인). 완전 오프라인: --with-models"
+fi
