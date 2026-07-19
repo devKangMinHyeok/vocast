@@ -4,11 +4,23 @@ import { Footer } from "../_sections/Footer";
 import { BlogHeader, FeaturedPost } from "./_components";
 import { BlogList } from "./BlogList";
 import { postCards } from "./_data";
+import { JsonLd } from "../_seo/JsonLd";
+import { abs } from "../../lib/site";
+import { graph, breadcrumbSchema } from "../../lib/schema";
+
+const DESCRIPTION =
+  "How we build voice cloning and narration that you can measure. Methodology, metrics, local-first engineering, and product notes.";
 
 export const metadata: Metadata = {
   title: "The Vocast blog",
-  description:
-    "How we build voice cloning and narration that you can measure. Methodology, metrics, local-first engineering, and product notes.",
+  description: DESCRIPTION,
+  alternates: { canonical: abs("/blog/") },
+  openGraph: {
+    type: "website",
+    url: abs("/blog/"),
+    title: "The Vocast blog",
+    description: DESCRIPTION,
+  },
 };
 
 export default function BlogIndex() {
@@ -18,6 +30,14 @@ export default function BlogIndex() {
 
   return (
     <main>
+      <JsonLd
+        data={graph(
+          breadcrumbSchema([
+            { name: "Home", path: "/" },
+            { name: "Blog", path: "/blog/" },
+          ]),
+        )}
+      />
       <Nav active="Blog" />
       <div style={{ maxWidth: 1080, margin: "0 auto", padding: "56px 24px 96px" }}>
         <BlogHeader />

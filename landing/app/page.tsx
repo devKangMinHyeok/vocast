@@ -9,6 +9,15 @@ import { Pricing } from "./_sections/Pricing";
 import { Faq } from "./_sections/Faq";
 import { FinalCta } from "./_sections/FinalCta";
 import { Footer } from "./_sections/Footer";
+import { FAQ_ITEMS } from "./_sections/faq-data";
+import { JsonLd } from "./_seo/JsonLd";
+import {
+  graph,
+  organizationSchema,
+  websiteSchema,
+  softwareApplicationSchema,
+  faqPageSchema,
+} from "../lib/schema";
 
 // Single-route Vocast landing, composed from section components built on the
 // Timbre design system (tokens + primitives). Almost entirely static; only Nav,
@@ -16,6 +25,14 @@ import { Footer } from "./_sections/Footer";
 export default function Page() {
   return (
     <main>
+      <JsonLd
+        data={graph(
+          organizationSchema(),
+          websiteSchema(),
+          softwareApplicationSchema(),
+          faqPageSchema(FAQ_ITEMS),
+        )}
+      />
       <Nav />
       <Hero />
       <Problem />

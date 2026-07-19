@@ -5,6 +5,9 @@ import { Nav } from "../../_sections/Nav";
 import { Footer } from "../../_sections/Footer";
 import { ArticleHeader, HeroCover, AuthorCard } from "../_components";
 import { POSTS, getPost, postCards } from "../_data";
+import { JsonLd } from "../../_seo/JsonLd";
+import { abs, absFromAsset } from "../../../lib/site";
+import { graph, articleSchema, breadcrumbSchema } from "../../../lib/schema";
 
 // Static export needs every slug up front.
 export function generateStaticParams() {
@@ -19,7 +22,23 @@ export async function generateMetadata({
   const { slug } = await params;
   const post = getPost(slug);
   if (!post) return { title: "The Vocast blog" };
-  return { title: post.title, description: post.excerpt };
+  const url = abs(`/blog/${slug}/`);
+  const cover = absFromAsset(post.cover);
+  return {
+    title: post.title,
+    description: post.excerpt,
+    alternates: { canonical: url },
+    openGraph: {
+      type: "article",
+      url,
+      title: post.title,
+      description: post.excerpt,
+      publishedTime: new Date(post.date).toISOString(),
+      authors: post.authors.map((a) => a.name),
+      images: [{ url: cover, width: 1924, height: 1084, alt: post.title }],
+    },
+    twitter: { card: "summary_large_image", title: post.title, description: post.excerpt, images: [cover] },
+  };
 }
 
 export default async function BlogPostPage({
@@ -35,6 +54,23 @@ export default async function BlogPostPage({
 
   return (
     <main>
+      <JsonLd
+        data={graph(
+          articleSchema({
+            slug,
+            title: post.title,
+            excerpt: post.excerpt,
+            cover: post.cover,
+            date: post.date,
+            authors: post.authors,
+          }),
+          breadcrumbSchema([
+            { name: "Home", path: "/" },
+            { name: "Blog", path: "/blog/" },
+            { name: post.title, path: `/blog/${slug}/` },
+          ]),
+        )}
+      />
       <Nav active="Blog" />
 
       <div style={{ maxWidth: 760, margin: "0 auto", padding: "48px 24px 40px" }}>

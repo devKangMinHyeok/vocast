@@ -1,0 +1,31 @@
+# Vocast
+
+> Vocast is a local, on-device Mac voice studio for creators. Clone your voice from about ninety seconds of audio, then narrate scripts up to 20,000 characters in a voice that sounds like you. Fully local, no account, no subscription, $49 one-time.
+
+Vocast runs entirely on an Apple Silicon Mac (M1 or newer, macOS 12+). Your voiceprint, scripts and renders never leave the device, and it keeps working offline after the first model download. Generation runs at roughly 4x realtime. Quality is measured rather than asserted: every render is scored on speaker similarity, word accuracy, naturalness and a prosody metric, and a render that misses any gate is rejected in continuous integration.
+
+## Product
+
+- [Vocast home](https://devkangminhyeok.github.io/vocast/): overview, features, pricing ($49 one-time) and FAQ.
+- [Browser demo](https://devkangminhyeok.github.io/vocast/demo/): in-browser noise-removal demo, no install.
+- [Source and methodology](https://github.com/devKangMinHyeok/vocast): the engine, quality scoring and MCP server are open on GitHub.
+
+## Blog
+
+- [Natural enough to publish: an AI voice you can actually use](https://devkangminhyeok.github.io/vocast/blog/natural-voice-you-can-publish/): how we define and measure naturalness, and what it takes to ship a cloned voice you would put your name on.
+- [Measuring prosody, not vibes](https://devkangminhyeok.github.io/vocast/blog/measuring-prosody-not-vibes/): why Vocast scores pitch, pauses and sentence endings separately and gates every render on all of them.
+- [Clone your voice in ninety seconds](https://devkangminhyeok.github.io/vocast/blog/clone-your-voice-in-ninety-seconds/): ten guided lines, one reusable profile you can version and roll back.
+- [Long-form without the re-record](https://devkangminhyeok.github.io/vocast/blog/long-form-without-the-re-record/): 20,000-character scripts, per-paragraph regeneration and performance transfer.
+- [Why Vocast is one-time and fully local](https://devkangminhyeok.github.io/vocast/blog/why-one-time-and-fully-local/): no subscription, no server, no account, by design.
+
+## Key facts
+
+- Price: $49 one-time, not a subscription. Includes a year of free updates; renewal after that is optional.
+- Platform: Apple Silicon Mac (M1 or newer), macOS 12+. Fully offline after the first model download.
+- Voice profile: built from about ninety seconds of audio (ten guided lines), reusable, versioned and roll-back-able.
+- Long-form: scripts up to 20,000 characters, with per-paragraph regeneration and karaoke word-level proofing.
+- Speed: generation runs at roughly 4x realtime on Apple Silicon.
+- Measured quality: speaker similarity 0.917 to 0.945 (two recordings of the same real person score about 0.909 against each other), character error rate 0%, no-reference MOS 3.50.
+- Privacy: no account and no server. Voiceprint, scripts and renders stay on the machine.
+- AI-native: exposes a local MCP server over stdio (clone_voice, denoise and more) that any MCP-capable agent, such as Claude, can call directly.
+- Use policy: clone only your own voice or a voice you have explicit consent to use.
