@@ -9,10 +9,16 @@ import { ToolPageLayout } from "../_components";
 import { TOOLS, getTool } from "../_data";
 import { ReadingTime } from "../panels/ReadingTime";
 import { NoiseRemover } from "../panels/NoiseRemover";
+import { MicTest } from "../panels/MicTest";
+import { VoiceRecorder } from "../panels/VoiceRecorder";
+import { SilenceRemover } from "../panels/SilenceRemover";
 
 const PANELS: Record<string, React.ComponentType> = {
   "script-reading-time-calculator": ReadingTime,
   "audio-noise-remover": NoiseRemover,
+  "mic-test": MicTest,
+  "voice-recorder": VoiceRecorder,
+  "silence-remover": SilenceRemover,
 };
 
 export function generateStaticParams() {

@@ -14,6 +14,9 @@ Vocast runs entirely on an Apple Silicon Mac (M1 or newer, macOS 12+). Your voic
 
 - [Audio noise remover](https://vocast.me/tools/audio-noise-remover/): remove background noise from audio or video, in your browser, nothing uploaded.
 - [Script reading time calculator](https://vocast.me/tools/script-reading-time-calculator/): turn a script into an estimated spoken length at your speaking pace.
+- [Mic test](https://vocast.me/tools/mic-test/): check your microphone level, clipping, and quality before recording.
+- [Voice recorder](https://vocast.me/tools/voice-recorder/): record, trim, and download audio as WAV, all in your browser.
+- [Silence remover and trimmer](https://vocast.me/tools/silence-remover/): cut dead air automatically or trim by hand, then download a WAV.
 
 ## Blog
 
