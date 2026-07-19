@@ -75,9 +75,12 @@ SPKG="$STAGE/runtime/.venv/lib/python3.12/site-packages"
 # libtorch C++ headers: only needed to compile extensions against torch, not to run it.
 rm -rf "$SPKG/torch/include"
 # DNSMOS (onnxruntime) and speaker similarity (resemblyzer) are quality-evaluation
-# tools; the app never computes them while rendering. sklearn arrives with them, and
-# librosa was verified to import and run with sklearn removed.
-rm -rf "$SPKG/onnxruntime" "$SPKG/resemblyzer" "$SPKG/sklearn" "$SPKG"/scikit_learn*
+# tools; the app never computes them while rendering or building a voice profile.
+rm -rf "$SPKG/onnxruntime" "$SPKG/resemblyzer"
+# sklearn must stay even though nothing here imports it directly: librosa.decompose
+# does `import sklearn.decomposition` at module level, and librosa loads its submodules
+# lazily, so it only surfaces once something touches librosa.effects. Removing it let
+# `import librosa` succeed and then broke voice profile builds at the stats stage.
 # torch itself has to stay, and so do torch/bin and torch/testing. Measured, not guessed:
 #   - transformers imports torch at module load and mlx-audio's Qwen3 tokenizer goes
 #     through transformers, so TTS generation fails outright without it,
