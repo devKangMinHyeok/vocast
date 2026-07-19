@@ -8,6 +8,36 @@ struct RootView: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
+        // Onboarding replaces the main UI rather than covering it. As an overlay the
+        // panes underneath still existed, and AppKit resolves cursor rects by view
+        // geometry rather than SwiftUI z-order, so the script editor's NSTextView kept
+        // showing an I-beam through the onboarding screen.
+        main
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Palette.canvas)
+            .background(WindowChrome())
+            .ignoresSafeArea(.container, edges: .top)
+            .toolbar {
+                // A transparent, height-forcing item so the unified toolbar (and titlebar)
+                // is tall enough to vertically center the traffic lights on the top-bar row.
+                ToolbarItem(placement: .principal) {
+                    Color.clear.frame(width: 1, height: 30).accessibilityHidden(true)
+                }
+            }
+            .toolbarBackground(.hidden, for: .windowToolbar)
+            .preferredColorScheme(.dark)
+            .tint(Palette.accent)
+    }
+
+    @ViewBuilder private var main: some View {
+        if app.firstRunComplete {
+            shell
+        } else {
+            OnboardingView()
+        }
+    }
+
+    private var shell: some View {
         HStack(spacing: 0) {
             Sidebar().frame(width: kSidebarWidth)
             VHairline()
@@ -19,22 +49,7 @@ struct RootView: View {
                     .transition(.move(edge: .trailing))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Palette.canvas)
-        .background(WindowChrome())
-        .ignoresSafeArea(.container, edges: .top)
-        .toolbar {
-            // A transparent, height-forcing item so the unified toolbar (and titlebar)
-            // is tall enough to vertically center the traffic lights on the top-bar row.
-            ToolbarItem(placement: .principal) {
-                Color.clear.frame(width: 1, height: 30).accessibilityHidden(true)
-            }
-        }
-        .toolbarBackground(.hidden, for: .windowToolbar)
         .overlay(alignment: .bottomTrailing) { ToastView(toast: app.toast) }
-        .overlay { if !app.firstRunComplete { OnboardingView() } }
-        .preferredColorScheme(.dark)
-        .tint(Palette.accent)
     }
 }
 
