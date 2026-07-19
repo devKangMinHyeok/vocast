@@ -65,6 +65,34 @@ const NaturalVoiceBody: React.FC = () => (
       caption="Left: the quality report shown after every render. Right: the prosody breakdown per sentence."
     />
 
+    <Prose.Heading id="failure">Where a voice actually breaks</Prose.Heading>
+    <p>
+      Long-form failure is not one bug, it is four, and none of them are visible in a short clip.
+      They only surface once the voice has to keep going:
+    </p>
+    <ul>
+      <li>
+        <strong>Pitch collapse.</strong> The melody narrows paragraph by paragraph until the voice is
+        reading on a flat line. The first sentence has range; the fortieth does not.
+      </li>
+      <li>
+        <strong>Metronomic cadence.</strong> Pauses stop landing on meaning and start landing on a
+        timer, so every sentence takes the same beat and the rhythm turns mechanical.
+      </li>
+      <li>
+        <strong>Boundary breathing.</strong> The tiny breath and settle between sentences disappears,
+        and clauses run into each other with no room to think.
+      </li>
+      <li>
+        <strong>Clipped endings.</strong> Final words get chopped or dropped to an identical hard
+        stop, instead of decaying the way a person trails off.
+      </li>
+    </ul>
+    <p>
+      Each of these has its own named metric in Vocast and its own gate, so a render cannot pass by
+      being good on average while quietly failing one of them.
+    </p>
+
     <Prose.Heading id="numbers">The numbers, not the vibes</Prose.Heading>
     <p>Vocast scores every render on four axes, and gates on all of them:</p>
     <ul>
@@ -103,11 +131,15 @@ const NaturalVoiceBody: React.FC = () => (
 
     <Prose.Heading id="usable">So, can you actually use it?</Prose.Heading>
     <p>
-      Generation runs at roughly 4&times; realtime on an Apple Silicon Mac, entirely on the machine. 
+      Generation runs at roughly 4&times; realtime on an Apple Silicon Mac, entirely on the machine.
       No upload, no queue, no per-minute meter. A karaoke view colours each word as it plays so you
       proof a long narration by eye and ear at once. And when one paragraph comes out flat, you
-      regenerate just that block instead of re-rendering the whole take. It is not a voice that fools
-      you for ten seconds. It is a voice you can put on a twenty-minute video, in your own name.
+      regenerate just that block instead of re-rendering the whole take.
+    </p>
+    <p>
+      The same engine is available to an agent over MCP, so a script written in one tool can be
+      narrated, scored and returned without leaving your desk. It is not a voice that fools you for
+      ten seconds. It is a voice you can put on a twenty-minute video, in your own name.
     </p>
   </Prose>
 );
@@ -115,20 +147,84 @@ const NaturalVoiceBody: React.FC = () => (
 const ProsodyBody: React.FC = () => (
   <Prose>
     <p>
-      Most voice tools report one number, usually word accuracy, and call it quality. That measures
-      whether the words are right, not whether the delivery is human. We split naturalness into
-      properties we can score independently, so a regression in any one of them fails the build.
+      Most voice tools report one number, usually word accuracy, and call it quality. Word accuracy
+      tells you the words are right. It says nothing about whether the delivery is human. A voice can
+      be spelled perfectly and still read like a form letter, and that is exactly the version most
+      tools ship because it is the version their one metric approves.
     </p>
+    <p>
+      Vocast takes the opposite approach. We split naturalness into properties we can measure on their
+      own, hold each to a gate, and fail the whole render if any single property regresses. A take
+      does not get to pass by being pleasant on average while quietly falling apart in one dimension.
+    </p>
+
     <Prose.Heading id="north-star">A prosody north-star</Prose.Heading>
     <p>
-      PNS blends pitch dynamics, pause rhythm and the shape of sentence endings, benchmarked against a
-      human reading of the same text. A perfectly clear render can still fail it, which is the point.
+      The headline metric is a prosody naturalness score (PNS). It is not a vibe rating from a model
+      guessing at overall quality. It is a composite of three things we can point at:
     </p>
     <ul>
-      <li>Pitch range that does not collapse into a monotone over long passages.</li>
-      <li>Pauses that fall on clause boundaries, not on a fixed timer.</li>
-      <li>Endings that decay like a person, instead of a hard identical drop.</li>
+      <li>
+        <strong>Pitch dynamics.</strong> How much the melody moves, and whether that range survives
+        over a long passage instead of narrowing into a monotone by the fortieth sentence.
+      </li>
+      <li>
+        <strong>Pause rhythm.</strong> Whether silences land on clause boundaries, where a reader
+        would actually breathe, rather than on a fixed timer that ignores the sentence.
+      </li>
+      <li>
+        <strong>Ending shape.</strong> Whether final words decay the way a person trails off, instead
+        of being cut to an identical hard stop every time.
+      </li>
     </ul>
+    <p>
+      Each of these is benchmarked against a human reading the same lines, so the target is not an
+      abstract ideal, it is what a real person actually did with that text. A perfectly clear render
+      can still fail PNS, and when it does the failure is legible: you can see which axis dropped.
+    </p>
+
+    <Prose.Figure
+      src={asset("/blog/figure-quality.png")}
+      caption="Every render returns a scorecard. A miss on any axis rejects the take, it does not average away."
+    />
+
+    <Prose.Heading id="family">One score is not enough</Prose.Heading>
+    <p>
+      PNS sits on top of a family of narrower metrics, each added because it caught a specific way the
+      voice went wrong on real scripts:
+    </p>
+    <ul>
+      <li>
+        <strong>Boundary breathing.</strong> Scores the small breath and settle between sentences, so
+        clauses do not run together with no room to think.
+      </li>
+      <li>
+        <strong>Micro quality.</strong> Watches word endings, tricky pronunciations and the tiny
+        breaths inside a phrase, the details that read as human up close.
+      </li>
+      <li>
+        <strong>Energy stress.</strong> Checks that the stressed syllable in a word is actually
+        pushed, so emphasis carries meaning instead of flattening out.
+      </li>
+    </ul>
+
+    <Prose.Heading id="gate">Gated in CI, not in a meeting</Prose.Heading>
+    <p>
+      These numbers are not a report someone reads and nods at. They run in continuous integration
+      against a set of golden takes, and a change that drops any gate fails the build the same way a
+      broken test would. Every render carries its scorecard with it:
+    </p>
+    <pre><code>{`render.score
+  sim   0.931   pass   (human baseline 0.909)
+  cer   0.0%    pass
+  mos   3.50    pass   (reference 3.24)
+  pns   0.88    pass   (gate 0.82)`}</code></pre>
+    <p>
+      When we improve the model, we do it by running a field of candidate configurations, scoring them
+      all, and keeping the one that wins on the metrics rather than the one that sounds nice in a
+      single clip. The gate is what turns &ldquo;this take feels off&rdquo; into a number we can chase.
+    </p>
+
     <blockquote>We would rather reject a take than ship a flat one.</blockquote>
   </Prose>
 );
@@ -136,14 +232,46 @@ const ProsodyBody: React.FC = () => (
 const CloneBody: React.FC = () => (
   <Prose>
     <p>
-      Naturalness is worthless if getting your voice in is a chore. Vocast builds a profile from ten
-      short guided lines, about ninety seconds, designed to cover the sounds that trip up cloning.
+      A natural voice model is worthless if getting your voice into it is a chore. Most tools either
+      want a studio session and thirty minutes of clean tape, or they take a ten-second snippet and
+      give you a thin, brittle clone that only holds up on short lines. Vocast aims for the middle:
+      enough audio to be faithful, little enough that you record it once and move on.
     </p>
+
+    <Prose.Heading id="ninety">Ninety seconds, chosen on purpose</Prose.Heading>
+    <p>
+      A profile is built from ten short guided lines, about ninety seconds in total. The lines are not
+      random. They are picked to cover the sounds that trip cloning up: a wide pitch range, hard
+      consonants, trailing sentence endings, numbers, and the vowels that carry most of a voice&rsquo;s
+      identity. Coverage is why ninety focused seconds beats five unstructured minutes.
+    </p>
+    <p>
+      You read them in the app with the prompt on screen, and the build runs on your machine. When it
+      finishes you get a similarity number, not a shrug. Our profiles land between 0.917 and 0.945
+      against the source. For context, two separate recordings of the same real person score about
+      0.909 against each other, so a finished profile sits inside the range of your own voice on two
+      different days.
+    </p>
+
+    <Prose.Figure
+      src={asset("/blog/figure-profile.png")}
+      caption="The guided capture: read the prompt, watch the build, get a similarity score you can trust."
+    />
+
     <Prose.Heading id="reusable">A profile you own</Prose.Heading>
     <p>
-      From then on the profile is reusable. Narrate against it as often as you like, reinforce it with
-      more source clips, version it, and roll back if a new version drifts. Your voice becomes an
-      asset you keep, not a one-off upload you hope worked.
+      From then on the profile is a reusable asset, not a one-off upload you hope worked. You can:
+    </p>
+    <ul>
+      <li>Narrate against it as often as you like, with no re-recording.</li>
+      <li>Reinforce it with more source clips when you want it even closer.</li>
+      <li>Version it, so each rebuild is tracked rather than overwriting the last.</li>
+      <li>Roll back if a new version drifts, returning to the take you trusted.</li>
+    </ul>
+    <p>
+      And when a specific passage needs a specific delivery, you can read it yourself once and let the
+      clone follow your pacing and emphasis. Your voice stops being a snapshot and becomes something
+      you build on over time.
     </p>
   </Prose>
 );
@@ -151,14 +279,45 @@ const CloneBody: React.FC = () => (
 const LongformBody: React.FC = () => (
   <Prose>
     <p>
-      The real test of a voice is length. Small errors compound: the pitch range narrows, the cadence
-      turns metronomic, and one bad paragraph poisons the whole take.
+      The real test of a voice is length. Anything sounds fine for one sentence. The problems begin
+      when a voice has to hold together across a chapter, a course module, a twenty-minute script,
+      and they compound: the pitch range narrows, the cadence turns metronomic, and a single flat
+      paragraph in the middle poisons a take you otherwise liked.
     </p>
+    <p>
+      The lazy fix is to render the whole thing again and hope the bad paragraph comes out better.
+      That wastes minutes and rolls the dice on the good paragraphs too. Vocast is built so you never
+      have to do that.
+    </p>
+
+    <Prose.Heading id="architecture">Built to keep going</Prose.Heading>
+    <p>
+      Under the hood a resident model worker stays warm instead of reloading per request, paragraphs
+      are batched and run in parallel, and the whole pipeline is held to a real-time-factor gate so
+      that adding length does not quietly blow up the wait. In practice generation runs at roughly
+      four times realtime on an Apple Silicon Mac, and scripts can run up to 20,000 characters.
+    </p>
+
+    <Prose.Figure
+      src={asset("/blog/figure-longform.png")}
+      caption="A long script rendered as paragraph blocks, each one independently inspectable and replaceable."
+    />
+
     <Prose.Heading id="paragraph">Fix the paragraph, keep the take</Prose.Heading>
     <p>
-      Vocast handles scripts up to 20,000 characters and lets you regenerate a single paragraph in
-      place. Find the block that came out flat, swap it, keep the rest. There is also performance
-      transfer: read a passage yourself once, and the clone follows your pacing and emphasis.
+      A finished narration is not one opaque audio file. It is a set of paragraph blocks, each with
+      its own settings and version history. When one block comes out flat, you regenerate just that
+      block in place and keep everything around it:
+    </p>
+    <ul>
+      <li>The rest of the take is untouched, so nothing you already approved gets re-rolled.</li>
+      <li>Each regeneration is versioned, so you can compare and roll back to an earlier take.</li>
+      <li>You proof by eye and ear with a karaoke view that colours each word as it plays.</li>
+    </ul>
+    <p>
+      And for the passages that need a specific reading, there is performance transfer: read the
+      passage yourself once, and the clone follows your pacing and emphasis instead of guessing. The
+      result is a workflow that scales with the script, not one that punishes you for writing more.
     </p>
   </Prose>
 );
@@ -166,14 +325,39 @@ const LongformBody: React.FC = () => (
 const LocalBody: React.FC = () => (
   <Prose>
     <p>
-      If you make a living with your voice, where it lives is not a privacy nicety; it is the whole
-      basis of trusting the tool.
+      If you make a living with your voice, where that voice lives is not a privacy nicety. It is the
+      whole basis of trusting the tool. A voiceprint is not like a document you can revoke. Once a
+      convincing clone of you exists on someone else&rsquo;s server, you have to trust their policy,
+      their security and their future business model, forever. Most voice services ask you to do
+      exactly that, and to keep paying for the privilege.
     </p>
-    <Prose.Heading id="local">One-time, on your machine</Prose.Heading>
+
+    <Prose.Heading id="local">On your machine, by design</Prose.Heading>
     <p>
-      Vocast is a one-time purchase that runs fully on your Mac. There is no account and no server:
-      your voiceprint, scripts and renders never leave the device, and it keeps working offline after
-      the first model download.
+      Vocast runs fully on your Mac. There is no account and no server in the loop, which means:
+    </p>
+    <ul>
+      <li>Your voiceprint, your scripts and your renders never leave the device.</li>
+      <li>Nothing is queued on someone else&rsquo;s hardware or logged for &ldquo;model improvement&rdquo;.</li>
+      <li>After the first model download it keeps working offline, on a plane or behind a firewall.</li>
+    </ul>
+    <p>
+      This is not a marketing toggle that could be flipped later. There is no upload path in the
+      product to flip. The application ships as a sealed bundle with its own runtime and models, so it
+      does not phone home for dependencies and does not depend on a service staying online to function.
+    </p>
+
+    <Prose.Figure
+      src={asset("/blog/figure-audio.png")}
+      caption="Everything, capture through render, happens on the same machine. Nothing to upload, nothing to leak."
+    />
+
+    <Prose.Heading id="one-time">One-time, not a meter</Prose.Heading>
+    <p>
+      It is also a one-time purchase, not a subscription with a per-minute meter. Local processing is
+      what makes that possible: there is no server cost to pass on to you for every second of audio,
+      so there is no reason to rent you your own voice by the minute. You buy the tool, you own the
+      workflow, and the voice you build stays yours.
     </p>
   </Prose>
 );
@@ -197,7 +381,7 @@ export const POSTS: Post[] = [
     category: "Engineering",
     title: "Measuring prosody, not vibes",
     excerpt: "Why Vocast scores pitch, pauses and sentence endings separately, and gates every render on all of them.",
-    readTime: "4 min read",
+    readTime: "6 min read",
     date: "Jul 12, 2026",
     cover: asset("/blog/figure-quality.png"),
     authors: [team],
@@ -208,7 +392,7 @@ export const POSTS: Post[] = [
     category: "Voice",
     title: "Clone your voice in ninety seconds",
     excerpt: "Ten guided lines, one reusable profile you can version and roll back. Your voice as an asset you own.",
-    readTime: "3 min read",
+    readTime: "5 min read",
     date: "Jul 4, 2026",
     cover: asset("/blog/figure-profile.png"),
     authors: [kang],
@@ -219,7 +403,7 @@ export const POSTS: Post[] = [
     category: "Engineering",
     title: "Long-form without the re-record",
     excerpt: "20,000-character scripts, per-paragraph regeneration, and performance transfer for the passages that need a specific delivery.",
-    readTime: "4 min read",
+    readTime: "5 min read",
     date: "Jun 26, 2026",
     cover: asset("/blog/figure-longform.png"),
     authors: [team],
