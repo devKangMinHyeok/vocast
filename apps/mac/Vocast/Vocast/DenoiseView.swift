@@ -98,6 +98,7 @@ struct DenoiseImport: View {
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.audio, .movie, .mpeg4Movie, .wav, .mp3]
         if panel.runModal() == .OK, let url = panel.url {
+            app.denoise.importedFileURL = url
             app.denoise.fileName = url.lastPathComponent
             app.denoise.phase = .modeSelect
         }
@@ -107,6 +108,7 @@ struct DenoiseImport: View {
         guard let p = providers.first else { return }
         _ = p.loadObject(ofClass: URL.self) { url, _ in
             Task { @MainActor in
+                app.denoise.importedFileURL = url
                 app.denoise.fileName = url?.lastPathComponent ?? "audio-file.wav"
                 app.denoise.phase = .modeSelect
             }
@@ -134,10 +136,12 @@ struct DenoiseModeSelect: View {
 
     private func selectableMode(_ m: DenoiseMode) -> some View {
         let sel = app.denoise.mode == m
-        return Button { app.denoise.mode = m } label: {
+        let disabled = (m == .resynth && !app.resynthAvailable)
+        return Button { if !disabled { app.denoise.mode = m } } label: {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
+                HStack(spacing: 8) {
                     Text(m.title).font(.ui(15, .semibold)).foregroundStyle(Palette.ink)
+                    if disabled { Text("not installed").font(.mono(11)).foregroundStyle(Palette.ash) }
                     Spacer()
                     if sel {
                         Image(systemName: "checkmark.circle.fill").font(.system(size: 16)).foregroundStyle(Palette.accent)
@@ -151,6 +155,7 @@ struct DenoiseModeSelect: View {
             .background(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 .fill(sel ? Palette.accent.opacity(0.06) : Palette.surface))
             .hairline(Radius.card, color: sel ? Palette.accent : Palette.hairline)
+            .opacity(disabled ? 0.5 : 1)
         }.buttonStyle(.plain)
     }
 }
@@ -177,7 +182,8 @@ struct DenoiseProcessing: View {
             Spacer()
             ProgressView().controlSize(.large).tint(Palette.accent)
             Text("Cleaning audio").font(.ui(20, .semibold)).foregroundStyle(Palette.ink)
-            Text("\(app.denoise.mode.title) mode, on this Mac.").font(.ui(14)).foregroundStyle(Palette.mute)
+            Text("\(app.denoise.stageLabel.isEmpty ? app.denoise.mode.title + " mode" : app.denoise.stageLabel), on this Mac.")
+                .font(.ui(14)).foregroundStyle(Palette.mute)
             VStack(spacing: 8) {
                 ThinProgress(value: app.denoise.progress, height: 6)
                 HStack {
@@ -205,14 +211,13 @@ struct DenoiseResult: View {
                     Text(d.fileName).font(.ui(20, .semibold)).foregroundStyle(Palette.ink)
                     Text("cleaned · \(d.mode.title)").font(.mono(12)).foregroundStyle(Palette.good)
                     Spacer()
-                    PrimaryButton(title: "Export cleaned file") { app.exportCleaned() }
+                    PrimaryButton(title: "Export cleaned file") { app.denoiseExport() }
                 }
 
                 HStack(spacing: 16) {
-                    @Bindable var denoise = app.denoise
                     Segmented(options: [(ABMode.original, "Original"), (.cleaned, "Cleaned")],
-                              selection: $denoise.abMode)
-                    PlayCircle(playing: false, size: 42, filled: true) { }
+                              selection: Binding(get: { d.abMode }, set: { app.denoiseSetAB($0) }))
+                    PlayCircle(playing: d.playing, size: 42, filled: true) { app.denoisePlayToggle() }
                     Text("Now: \(d.abMode == .cleaned ? "Cleaned" : "Original")")
                         .font(.mono(13)).foregroundStyle(Palette.mute)
                     Spacer()
@@ -239,22 +244,29 @@ struct DenoiseResult: View {
         .hairline(Radius.card, color: active ? Palette.hairlineStrong : Palette.hairline)
     }
 
-    private var reportCard: some View {
+    @ViewBuilder private var reportCard: some View {
         HStack(alignment: .top, spacing: 40) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Word-ending preservation").font(.ui(13)).foregroundStyle(Palette.mute)
-                Text(d.report.wordEndingPct).font(.mono(28, .semibold)).foregroundStyle(Palette.ink)
-                Text("Consonants and word tails kept intact.").font(.ui(13)).foregroundStyle(Palette.mute)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Residual noise").font(.ui(13)).foregroundStyle(Palette.mute)
-                Text(d.report.residualDb).font(.mono(28, .semibold)).foregroundStyle(Palette.ink)
-                Text("Down from \(d.report.originalDb) in the original.").font(.ui(13)).foregroundStyle(Palette.mute)
+            if d.report.isResynth {
+                metric("Voice similarity", d.report.simText,
+                       "How closely the cleaned voice matches the original.")
+            } else {
+                metric("Speech preserved", d.report.speechPreservedText,
+                       "How much of your voice energy was kept.")
+                metric("Pause suppression", d.report.pauseSuppText,
+                       "Noise removed from the silences.")
             }
             Spacer()
         }
         .padding(Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
         .card(Palette.surface, radius: Radius.card)
+    }
+
+    private func metric(_ label: String, _ value: String, _ sub: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(label).font(.ui(13)).foregroundStyle(Palette.mute)
+            Text(value).font(.mono(28, .semibold)).foregroundStyle(Palette.ink)
+            Text(sub).font(.ui(13)).foregroundStyle(Palette.mute)
+        }
     }
 }

@@ -116,6 +116,33 @@ struct Scorecard {
     }
 
     static let footnote = "SIM matches your voice. CER is misread words. MOS is predicted naturalness. PNS is overall rhythm and emphasis. Values shown are examples."
+
+    static let denoiseFootnote = "Speech preserved is how much of your voice energy was kept. Pause suppression is how much noise was removed from the silences. Measured on this Mac."
+
+    /// Build a real scorecard from the denoise engine's report.
+    static func fromDenoise(_ r: DenoiseReport) -> Scorecard {
+        if let sim = r.sim {   // resynth mode reports voice similarity
+            let pass = sim >= 0.85
+            return Scorecard(
+                gatePassed: pass,
+                attentionReason: pass ? nil : "voice similarity below target",
+                headline: [HeadlineMetric(key: "SIM", value: String(format: "%.2f", sim),
+                                          unit: "", name: "Voice similarity", progress: sim, pass: pass)],
+                sub: [])
+        }
+        let preserved = max(0, 100 - r.speechLossPct)
+        let pass = r.speechLossPct < 15
+        return Scorecard(
+            gatePassed: pass,
+            attentionReason: pass ? nil : "speech loss above target",
+            headline: [
+                HeadlineMetric(key: "SPEECH", value: String(format: "%.0f", preserved), unit: "%",
+                               name: "Speech preserved", progress: preserved / 100, pass: pass),
+                HeadlineMetric(key: "PAUSE", value: String(format: "%.0f", abs(r.pauseSuppDb)), unit: "dB",
+                               name: "Pause suppression", progress: min(1, abs(r.pauseSuppDb) / 40), pass: true),
+            ],
+            sub: [])
+    }
 }
 
 // MARK: - Studio
@@ -253,9 +280,24 @@ enum DenoisePhase { case importEmpty, modeSelect, processing, result }
 enum ABMode { case original, cleaned }
 
 struct DenoiseReport {
-    var wordEndingPct: String = "98.6%"
-    var residualDb: String = "-52 dB"
-    var originalDb: String = "-18 dB"
+    var speechLossPct: Double = 0
+    var pauseSuppDb: Double = 0
+    var sim: Double? = nil
+    var engine: String = ""
+    var isResynth: Bool = false
+
+    var speechPreservedText: String { String(format: "%.0f%%", max(0, 100 - speechLossPct)) }
+    var pauseSuppText: String { String(format: "%.0f dB", abs(pauseSuppDb)) }
+    var simText: String { sim.map { String(format: "%.2f", $0) } ?? "-" }
+
+    init() {}
+    init(from r: DNReport?, mode: String, engine: String) {
+        self.engine = engine
+        self.isResynth = (mode == "resynth")
+        self.speechLossPct = r?.speech_loss_pct ?? 0
+        self.pauseSuppDb = r?.pause_supp_db ?? 0
+        self.sim = r?.sim
+    }
 }
 
 struct DenoiseJob: Identifiable {
@@ -269,9 +311,13 @@ struct DenoiseJob: Identifiable {
 final class DenoiseModel {
     var phase: DenoisePhase = .importEmpty
     var fileName: String = ""
-    var mode: DenoiseMode = .resynth
+    var importedFileURL: URL?
+    var engineJobID: String?
+    var mode: DenoiseMode = .standard
     var progress: Double = 0
     var eta: Double = 0
+    var stageLabel: String = ""
+    var playing = false
     var abMode: ABMode = .cleaned
     var report = DenoiseReport()
     var scorecard = Scorecard.sample(attention: false)

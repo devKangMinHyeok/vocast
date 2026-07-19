@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Observation
 import UserNotifications
 import AVFoundation
@@ -39,6 +40,36 @@ final class AppModel {
     let tasks = TasksModel()
     let settings = SettingsModel()
     let onboarding = OnboardingModel()
+
+    // Local Python engine (HTTP sidecar)
+    let engine = EngineClient()
+    var engineReady = false
+    var resynthAvailable = false
+    private var dnPollTask: Task<Void, Never>?
+    private var dnPlayer: AVPlayer?
+
+    init() {
+        Task { await checkEngine() }
+        // Dev/test hook: preload a denoise file so the pipeline can be exercised
+        // without driving the native open panel. Only active when the env var is set.
+        if let f = ProcessInfo.processInfo.environment["VOCAST_TEST_FILE"], !f.isEmpty {
+            let url = URL(fileURLWithPath: f)
+            denoise.importedFileURL = url
+            denoise.fileName = url.lastPathComponent
+            denoise.phase = .modeSelect
+            area = .denoise
+        }
+    }
+
+    func checkEngine() async {
+        if let h = await engine.waitUntilReady(timeout: 6) {
+            engineReady = true
+            resynthAvailable = h.resynth
+        } else {
+            engineReady = false
+            resynthAvailable = false
+        }
+    }
 
     // Shell UI state
     var area: Area = .studio
@@ -215,28 +246,130 @@ final class AppModel {
         })
     }
 
-    // MARK: Denoise
+    // MARK: Denoise (real engine)
 
     func startDenoise() {
+        guard let fileURL = denoise.importedFileURL else {
+            notify("Import a file first.")
+            return
+        }
         denoise.phase = .processing
         denoise.progress = 0
+        denoise.stageLabel = "Preparing"
+        let mode = denoise.mode.rawValue
+        let start = Date()
 
         let job = Job(kind: .denoise, title: "Denoise, \(denoise.fileName)",
                       subtitle: "\(denoise.mode.title) mode", state: .running,
                       target: denoise.fileName, profile: denoise.mode.title)
         tasks.jobs.insert(job, at: 0)
 
-        drive(4.0, eta: 11, tick: { p, e in
-            self.denoise.progress = p
-            self.denoise.eta = e
-            job.progress = p; job.eta = e
-        }, done: {
-            self.denoise.abMode = .cleaned
-            self.denoise.phase = .result
-            job.state = .done
-            job.timeLabel = "just now"
-            self.complete("Cleanup done, residual noise -52 dB.")
-        })
+        dnPollTask?.cancel()
+        dnPollTask = Task { @MainActor in
+            do {
+                let jid = try await engine.createDenoise(fileURL: fileURL, mode: mode)
+                denoise.engineJobID = jid
+                while !Task.isCancelled {
+                    let st = try await engine.denoiseStatus(jid)
+                    let eta = st.eta_sec ?? 12
+                    let elapsed = Date().timeIntervalSince(start)
+                    denoise.stageLabel = stageText(st.stage)
+                    denoise.progress = min(0.96, elapsed / max(eta, 1))
+                    denoise.eta = max(1, eta - elapsed)
+                    job.progress = denoise.progress
+                    job.eta = denoise.eta
+
+                    if st.status == "done" {
+                        denoise.progress = 1
+                        denoise.report = DenoiseReport(from: st.report, mode: mode, engine: st.engine ?? "")
+                        denoise.scorecard = .fromDenoise(denoise.report)
+                        denoise.abMode = .cleaned
+                        denoise.phase = .result
+                        job.state = .done
+                        job.timeLabel = "just now"
+                        complete("Cleanup done, \(denoise.mode.title) mode.")
+                        return
+                    }
+                    if st.status == "error" {
+                        denoise.phase = .modeSelect
+                        job.state = .done
+                        job.timeLabel = "failed"
+                        notify("Cleanup failed: \(st.error ?? "unknown error")")
+                        return
+                    }
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                }
+            } catch let e as EngineError {
+                denoise.phase = .modeSelect
+                tasks.jobs.removeAll { $0.id == job.id }
+                notify(engineMessage(e))
+            } catch {
+                denoise.phase = .modeSelect
+                tasks.jobs.removeAll { $0.id == job.id }
+                notify("Could not reach the local engine. Is it running?")
+            }
+        }
+    }
+
+    private func stageText(_ stage: String) -> String {
+        switch stage {
+        case "extract": return "Reading the file"
+        case "preview": return "Building preview"
+        case "report": return "Measuring quality"
+        case "done": return "Done"
+        default: return "Cleaning audio"
+        }
+    }
+
+    private func engineMessage(_ e: EngineError) -> String {
+        switch e {
+        case .notAvailable(let m): return m
+        case .badResponse(_, let m): return m
+        case .transport: return "Could not reach the local engine. Is it running?"
+        }
+    }
+
+    // A/B playback of the real cleaned / original preview.
+    func denoisePlayToggle() {
+        guard let jid = denoise.engineJobID else { return }
+        if denoise.playing {
+            dnPlayer?.pause()
+            denoise.playing = false
+            return
+        }
+        let kind = denoise.abMode == .cleaned ? "clean" : "orig"
+        let url = engine.denoiseAudioURL(jid, kind: kind)
+        dnPlayer = AVPlayer(url: url)
+        dnPlayer?.play()
+        denoise.playing = true
+    }
+
+    func denoiseSetAB(_ mode: ABMode) {
+        denoise.abMode = mode
+        if denoise.playing {   // restart on the newly selected track
+            dnPlayer?.pause()
+            denoise.playing = false
+            denoisePlayToggle()
+        }
+    }
+
+    func denoiseExport() {
+        guard let jid = denoise.engineJobID else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = denoise.fileName.replacingOccurrences(of: ".", with: "_") + "_clean.wav"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        let src = engine.denoiseFileURL(jid)
+        Task { @MainActor in
+            do {
+                let (tmp, _) = try await URLSession.shared.download(from: src)
+                try? FileManager.default.removeItem(at: dest)
+                try FileManager.default.moveItem(at: tmp, to: dest)
+                complete("Cleaned file exported.")
+            } catch {
+                notify("Could not export the cleaned file.")
+            }
+        }
     }
 
     // MARK: Helpers

@@ -4,14 +4,15 @@ import SwiftUI
 
 struct ScorecardView: View {
     var card: Scorecard
+    var footnote: String = Scorecard.footnote
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.lg) {
                 gateBanner
                 grid
-                subMetrics
-                Text(Scorecard.footnote)
+                if !card.sub.isEmpty { subMetrics }
+                Text(footnote)
                     .font(.ui(12.5))
                     .foregroundStyle(Palette.ash)
                     .fixedSize(horizontal: false, vertical: true)

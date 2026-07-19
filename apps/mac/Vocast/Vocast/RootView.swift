@@ -200,7 +200,7 @@ struct InspectorPane: View {
             }
         case .denoise:
             if app.denoise.phase == .result {
-                ScorecardView(card: app.denoise.scorecard)
+                ScorecardView(card: app.denoise.scorecard, footnote: Scorecard.denoiseFootnote)
             } else {
                 InspectorEmpty(text: "Import a file and run a cleanup to see the quality report here.")
             }
