@@ -27,9 +27,8 @@ export interface Post {
 /** Serializable card fields (safe to hand to a client component, no Body). */
 export type PostCard = Omit<Post, "Body">;
 
-// Avatars use the initials fallback, no third-party author photos.
-const kang: Author = { name: "Minhyeok Kang", role: "Founder · Vocast", bio: "Building a local voice studio for creators. Writes about voice cloning, prosody metrics, and shipping on-device." };
-const team: Author = { name: "Vocast Team", role: "Vocast", bio: "Field notes from the people building Vocast." };
+const kang: Author = { name: "Minhyeok Kang", avatar: asset("/blog/kang-minhyeok.png"), role: "Founder · Vocast", bio: "Building a local voice studio for creators. Writes about voice cloning, prosody metrics, and shipping on-device." };
+const team: Author = { name: "Vocast Team", avatar: asset("/blog/vocast-mark.svg"), role: "Vocast", bio: "Field notes from the people building Vocast." };
 
 // --- Featured: the natural-voice article, as a full Prose body ---
 const NaturalVoiceBody: React.FC = () => (
