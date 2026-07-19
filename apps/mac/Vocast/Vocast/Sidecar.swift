@@ -21,8 +21,8 @@ final class Sidecar {
         guard process == nil else {
             return URL(string: "http://127.0.0.1:\(port)")
         }
-        guard let dir = engineDir(), let uv = findUV() else {
-            NSLog("Vocast: could not locate the engine directory or uv; not spawning sidecar.")
+        guard let dir = engineDir(), let launch = launcher(in: dir) else {
+            NSLog("Vocast: could not locate the engine directory or a Python launcher; not spawning sidecar.")
             return nil
         }
 
@@ -30,13 +30,16 @@ final class Sidecar {
         port = p
 
         let proc = Process()
-        proc.executableURL = uv
-        proc.arguments = ["run", "python", "api/server.py", "--port", "\(p)"]
+        proc.executableURL = launch.exec
+        proc.arguments = launch.args + ["--port", "\(p)"]
         proc.currentDirectoryURL = dir
 
         var env = ProcessInfo.processInfo.environment
-        let extra = "\(uv.deletingLastPathComponent().path):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        let extra = "\(launch.exec.deletingLastPathComponent().path):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
         env["PATH"] = (env["PATH"].map { "\($0):\(extra)" }) ?? extra
+        // Parent-death watchdog: the server self-exits if this app process dies,
+        // so a crash cannot leave an orphaned engine behind.
+        env["VOCAST_PARENT_PID"] = "\(ProcessInfo.processInfo.processIdentifier)"
         proc.environment = env
 
         // Pipe logs to a temp file for debugging.
@@ -83,15 +86,21 @@ final class Sidecar {
         return nil
     }
 
-    private func findUV() -> URL? {
+    /// Prefer running the engine's venv Python directly (a single child process that
+    /// terminate() cleans up directly). Fall back to `uv run` if there is no venv.
+    private func launcher(in dir: URL) -> (exec: URL, args: [String])? {
         let fm = FileManager.default
-        let candidates = [
+        let venvPython = dir.appendingPathComponent(".venv/bin/python")
+        if fm.isExecutableFile(atPath: venvPython.path) {
+            return (venvPython, ["api/server.py"])
+        }
+        let uvCandidates = [
             "\(NSHomeDirectory())/.local/bin/uv",
             "/opt/homebrew/bin/uv",
             "/usr/local/bin/uv",
         ]
-        for c in candidates where fm.isExecutableFile(atPath: c) {
-            return URL(fileURLWithPath: c)
+        for c in uvCandidates where fm.isExecutableFile(atPath: c) {
+            return (URL(fileURLWithPath: c), ["run", "python", "api/server.py"])
         }
         return nil
     }

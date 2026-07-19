@@ -401,10 +401,38 @@ def history_delete_api(job_id):
     return jsonify(ok=True)
 
 
+def _install_parent_watchdog():
+    """부모(맥 앱)가 죽으면 서버도 스스로 종료 — 사이드카 고아 프로세스 방지.
+
+    macOS엔 리눅스의 PR_SET_PDEATHSIG가 없어 부모 PID를 폴링한다. VOCAST_PARENT_PID
+    가 있을 때만 동작하므로 웹/CLI 단독 실행에는 영향이 없다.
+    """
+    pid_s = os.environ.get("VOCAST_PARENT_PID")
+    if not pid_s:
+        return
+    try:
+        ppid = int(pid_s)
+    except ValueError:
+        return
+    import threading
+    import time
+
+    def _watch():
+        while True:
+            time.sleep(1.0)
+            try:
+                os.kill(ppid, 0)  # 존재 확인 (신호 안 보냄)
+            except OSError:
+                os._exit(0)       # 부모 사라짐 → 하드 종료
+
+    threading.Thread(target=_watch, daemon=True).start()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8756)
     args = ap.parse_args()
+    _install_parent_watchdog()
     ensure_ffmpeg()
     feats = "노이즈 제거" + (" + 보이스 클로닝" if clone_available() else
                             " (클로닝: 미설치 — voice/requirements-voice.txt)")
