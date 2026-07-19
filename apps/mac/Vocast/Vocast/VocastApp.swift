@@ -10,7 +10,8 @@ struct VocastApp: App {
                 .environment(app)
                 .frame(minWidth: 1040, minHeight: 680)
         }
-        .windowStyle(.hiddenTitleBar)
+        .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified)
         .defaultSize(width: 1280, height: 832)
         .commands { VocastCommands(app: app) }
     }

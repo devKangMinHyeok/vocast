@@ -11,7 +11,7 @@ struct Sidebar: View {
                 Text("Vocast").font(.ui(15, .semibold)).foregroundStyle(Palette.ink)
                 Spacer()
             }
-            .padding(.leading, 78)
+            .padding(.leading, 92)
             .frame(height: kBarHeight)
             .overlay(alignment: .bottom) { Hairline() }
 

@@ -21,6 +21,16 @@ struct RootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.canvas)
+        .background(WindowChrome())
+        .ignoresSafeArea(.container, edges: .top)
+        .toolbar {
+            // A transparent, height-forcing item so the unified toolbar (and titlebar)
+            // is tall enough to vertically center the traffic lights on the top-bar row.
+            ToolbarItem(placement: .principal) {
+                Color.clear.frame(width: 1, height: 30).accessibilityHidden(true)
+            }
+        }
+        .toolbarBackground(.hidden, for: .windowToolbar)
         .overlay(alignment: .bottomTrailing) { ToastView(toast: app.toast) }
         .overlay { if !app.firstRunComplete { OnboardingView() } }
         .preferredColorScheme(.dark)
