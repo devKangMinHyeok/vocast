@@ -104,7 +104,7 @@ struct GeneralPane: View {
                 Divider().overlay(Palette.hairline)
                 SettingRow(label: "Default voice profile") {
                     Picker("", selection: $settings.defaultProfile) {
-                        ForEach(app.voices.profiles.map(\.name), id: \.self) { Text($0).tag($0) }
+                        ForEach(app.backendProfiles.map(\.name), id: \.self) { Text($0).tag($0) }
                     }.fixedSize().labelsHidden()
                 }
             }

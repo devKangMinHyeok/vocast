@@ -241,36 +241,33 @@ enum VoicesPhase { case library, record, building, result, detail }
 
 @MainActor @Observable
 final class VoicesModel {
-    var profiles: [VoiceProfile] = SampleData.profiles
     var phase: VoicesPhase = .library
-    var openedProfileID: VoiceProfile.ID?
+    var openedProfileID: String?
 
     // Guided recording flow
     let prompts = SampleData.prompts
     var recStep = 0
     var recording = false
-    var recElapsed: Double = 0
     var captured: [Bool] = Array(repeating: false, count: 10)
-    var level: Double = 0          // 0...1 for the meter
-    var levelDb: Double = -60
+    var clipURLs: [Int: URL] = [:]
 
     // Build job mirror
+    var buildJobID: String?
+    var buildStage: String = ""
     var buildProgress: Double = 0
     var buildETA: Double = 0
+    var builtProfileID: String?
 
-    var openedProfile: VoiceProfile? { profiles.first { $0.id == openedProfileID } }
     var capturedCount: Int { captured.filter { $0 }.count }
-    var capturedSeconds: Int { min(90, capturedCount * 9 + (recording ? Int(recElapsed) : 0)) }
+    var capturedSeconds: Int { min(90, capturedCount * 9) }
     var currentLineCaptured: Bool { recStep < captured.count && captured[recStep] }
 
     func startFlow() {
         phase = .record
         recStep = 0
         recording = false
-        recElapsed = 0
         captured = Array(repeating: false, count: 10)
-        level = 0
-        levelDb = -60
+        clipURLs = [:]
     }
 }
 

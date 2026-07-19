@@ -38,9 +38,28 @@ struct DNJob: Decodable {
 
 // MARK: Narration (Studio) decodables
 
+struct ProfileStats: Decodable { let duration: Double? }
+
+struct ProfileVersion: Decodable, Identifiable {
+    let version: Int
+    let built: String?
+    var id: Int { version }
+}
+
 struct EngineProfile: Decodable, Identifiable {
     let id: String
     let name: String
+    var version: Int?
+    var recordings: Int?
+    var ready: Bool?
+    var built: String?
+    var stats: ProfileStats?
+    var version_log: [ProfileVersion]?
+
+    var clipCount: Int { recordings ?? 0 }
+    var durationSec: Double { stats?.duration ?? 0 }
+    var versionLabel: String { "v\(version ?? 1)" }
+    var initials: String { String(name.trimmingCharacters(in: .whitespaces).prefix(2)).uppercased() }
 }
 
 struct NWord: Decodable { let w: String; let s: Double; let e: Double }
@@ -192,6 +211,61 @@ final class EngineClient {
         try check(resp, data)
         struct R: Decodable { let profiles: [EngineProfile] }
         return try JSONDecoder().decode(R.self, from: data).profiles
+    }
+
+    func createProfile(name: String) async throws -> String {
+        let (data, resp) = try await multipartPost("/api/profiles", fields: [.text(name: "name", value: name)])
+        try check(resp, data)
+        struct R: Decodable { let id: String }
+        return try JSONDecoder().decode(R.self, from: data).id
+    }
+
+    func addRecording(pid: String, fileURL: URL, idx: Int) async throws {
+        let bytes = try Data(contentsOf: fileURL)
+        let (data, resp) = try await multipartPost("/api/profiles/\(pid)/recordings", fields: [
+            .file(name: "audio", filename: fileURL.lastPathComponent, mime: "audio/wav", data: bytes),
+            .text(name: "idx", value: String(idx)),
+        ])
+        try check(resp, data)
+    }
+
+    func addSource(pid: String, fileURL: URL) async throws {
+        let bytes = try Data(contentsOf: fileURL)
+        let (data, resp) = try await multipartPost("/api/profiles/\(pid)/sources", fields: [
+            .file(name: "audio", filename: fileURL.lastPathComponent, mime: mimeType(for: fileURL), data: bytes),
+        ])
+        try check(resp, data)
+    }
+
+    func buildProfile(pid: String) async throws -> String {
+        let (data, resp) = try await jsonPost("/api/profiles/\(pid)/build_async", body: [:])
+        try check(resp, data)
+        struct R: Decodable { let job_id: String }
+        return try JSONDecoder().decode(R.self, from: data).job_id
+    }
+
+    func rollbackProfile(pid: String, version: Int) async throws {
+        let (data, resp) = try await jsonPost("/api/profiles/\(pid)/rollback", body: ["version": version])
+        try check(resp, data)
+    }
+
+    func deleteProfile(pid: String) async throws {
+        var req = URLRequest(url: base.appendingPathComponent("api/profiles/\(pid)"))
+        req.httpMethod = "DELETE"
+        do {
+            let (data, resp) = try await session.data(for: req)
+            try check(resp, data)
+        } catch let e as EngineError { throw e }
+        catch { throw EngineError.transport(error.localizedDescription) }
+    }
+
+    private func jsonPost(_ path: String, body: [String: Any]) async throws -> (Data, URLResponse) {
+        var req = URLRequest(url: base.appendingPathComponent(path))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        do { return try await session.data(for: req) }
+        catch { throw EngineError.transport(error.localizedDescription) }
     }
 
     func createNarration(text: String, profileID: String?, fast: Bool = false) async throws -> String {

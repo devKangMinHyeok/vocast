@@ -24,7 +24,7 @@ struct Sidebar: View {
                         .padding(.leading, 12).padding(.bottom, 6)
 
                     SidebarRow(area: .studio)
-                    SidebarRow(area: .voices, count: app.voices.profiles.count)
+                    SidebarRow(area: .voices, count: app.backendProfiles.count)
                     SidebarRow(area: .denoise)
                     SidebarRow(area: .tasks, count: max(app.tasks.runningCount, 0) > 0 ? app.tasks.runningCount : nil)
                 }

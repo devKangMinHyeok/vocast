@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct VoicesView: View {
     @Environment(AppModel.self) private var app
@@ -13,6 +14,11 @@ struct VoicesView: View {
     }
 }
 
+// Decorative waveform seed from a profile id (the profile card strip is cosmetic).
+private func peaksFor(_ id: String) -> [Double] {
+    Waveform.peaks(48, seed: UInt64(abs(id.hashValue) % 100000))
+}
+
 // MARK: - Library
 
 struct VoicesLibrary: View {
@@ -24,24 +30,24 @@ struct VoicesLibrary: View {
             VStack(alignment: .leading, spacing: Space.xl) {
                 HStack(spacing: 12) {
                     Text("Your voices").font(.ui(20, .semibold)).foregroundStyle(Palette.ink)
-                    Text("\(app.voices.profiles.count) profiles · stored on this Mac")
+                    Text("\(app.backendProfiles.count) profiles · stored on this Mac")
                         .font(.mono(12)).foregroundStyle(Palette.mute)
                 }
                 LazyVGrid(columns: cols, spacing: 20) {
-                    ForEach(app.voices.profiles) { p in
-                        ProfileCard(profile: p)
-                    }
+                    ForEach(app.backendProfiles) { p in ProfileCard(profile: p) }
                     NewVoiceTile()
                 }
             }
             .padding(Space.xl)
         }
+        .task { await app.refreshProfiles() }
     }
 }
 
 struct ProfileCard: View {
     @Environment(AppModel.self) private var app
-    var profile: VoiceProfile
+    var profile: EngineProfile
+    private var isDefault: Bool { app.selectedProfileID == profile.id }
 
     var body: some View {
         Button {
@@ -50,33 +56,30 @@ struct ProfileCard: View {
         } label: {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 14) {
-                    Avatar(initials: profile.initials, size: 52, elevated: !profile.isDefault)
+                    Avatar(initials: profile.initials, size: 52, elevated: !isDefault)
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 8) {
                             Text(profile.name).font(.ui(17, .semibold)).foregroundStyle(Palette.ink)
                                 .fixedSize(horizontal: false, vertical: true)
-                            if profile.isDefault { TagPill(text: "default") }
+                            if isDefault { TagPill(text: "default") }
                         }
-                        Text("\(profile.version) · \(profile.lastUsed)")
+                        Text("\(profile.versionLabel) · \(profile.clipCount) clips")
                             .font(.mono(12)).foregroundStyle(Palette.mute)
                     }
                     Spacer(minLength: 0)
                 }
-                WaveBars(peaks: profile.peaks, color: Palette.stone, height: 30)
+                WaveBars(peaks: peaksFor(profile.id), color: Palette.stone, height: 30)
                 Rectangle().fill(Palette.hairline).frame(height: 1)
                 HStack {
-                    Text("Similarity").font(.mono(12)).foregroundStyle(Palette.mute)
+                    Text("Voice length").font(.mono(12)).foregroundStyle(Palette.mute)
                     Spacer()
-                    HStack(spacing: 7) {
-                        StatusDot(color: Palette.good, size: 7)
-                        Text(profile.sim).font(.mono(13)).foregroundStyle(Palette.ink)
-                    }
+                    Text(fmtTime(profile.durationSec)).font(.mono(13)).foregroundStyle(Palette.ink)
                 }
             }
             .padding(Space.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .card(profile.isDefault ? Palette.surfaceCard : Palette.surface, radius: Radius.card,
-                  border: profile.isDefault ? Palette.hairlineStrong : Palette.hairline)
+            .card(isDefault ? Palette.surfaceCard : Palette.surface, radius: Radius.card,
+                  border: isDefault ? Palette.hairlineStrong : Palette.hairline)
         }
         .buttonStyle(.plain)
     }
@@ -108,16 +111,17 @@ struct NewVoiceTile: View {
     }
 }
 
-// MARK: - Guided recording (signature)
+// MARK: - Guided recording (real microphone)
 
 struct GuidedRecording: View {
     @Environment(AppModel.self) private var app
     private var v: VoicesModel { app.voices }
+    private var rec: AudioRecorder { app.recorder }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.lg) {
-                Button { app.voices.phase = .library } label: {
+                Button { app.recorder.stop(); app.voices.phase = .library } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
                         Text("Back to voices").font(.ui(13.5))
@@ -130,7 +134,6 @@ struct GuidedRecording: View {
                         .font(.ui(14)).foregroundStyle(Palette.mute)
                 }
 
-                // Progress row
                 VStack(spacing: 8) {
                     HStack {
                         Text("Line \(v.recStep + 1) of 10").font(.mono(12)).foregroundStyle(Palette.mute)
@@ -142,7 +145,6 @@ struct GuidedRecording: View {
 
                 promptCard
 
-                // Line dots
                 HStack(spacing: 8) {
                     ForEach(0..<10, id: \.self) { i in
                         Capsule()
@@ -165,22 +167,21 @@ struct GuidedRecording: View {
             Text(v.prompts[v.recStep]).font(.ui(22, .regular)).foregroundStyle(Palette.ink)
                 .lineSpacing(6).fixedSize(horizontal: false, vertical: true)
 
-            // Capture panel
             VStack(spacing: 16) {
                 HStack {
                     HStack(spacing: 10) {
-                        StatusDot(color: v.recording ? Palette.danger : Palette.ash, size: 9, blink: v.recording)
-                        Text(v.recording ? "Recording" : (v.currentLineCaptured ? "Captured" : "Ready to record"))
+                        StatusDot(color: rec.recording ? Palette.danger : Palette.ash, size: 9, blink: rec.recording)
+                        Text(rec.recording ? "Recording" : (v.currentLineCaptured ? "Captured" : "Ready to record"))
                             .font(.mono(13)).foregroundStyle(Palette.body)
                     }
                     Spacer()
-                    Text(fmtTime(v.recElapsed)).font(.mono(13)).foregroundStyle(Palette.mute)
+                    Text(fmtTime(rec.elapsed)).font(.mono(13)).foregroundStyle(Palette.mute)
                 }
-                LiveWave(active: v.recording, color: Palette.accent, height: 56)
+                LiveWave(active: rec.recording, color: Palette.accent, height: 56)
                 HStack(spacing: 12) {
                     Text("LVL").font(.mono(11)).foregroundStyle(Palette.ash)
-                    LevelBar(level: v.recording ? v.level : 0, height: 8)
-                    Text(v.recording ? "\(Int(v.levelDb)) dB" : "-∞ dB").font(.mono(12)).foregroundStyle(Palette.mute)
+                    LevelBar(level: rec.recording ? rec.level : 0, height: 8)
+                    Text(rec.recording ? "\(Int(rec.db)) dB" : "-∞ dB").font(.mono(12)).foregroundStyle(Palette.mute)
                         .frame(width: 56, alignment: .trailing)
                 }
             }
@@ -196,7 +197,7 @@ struct GuidedRecording: View {
 
     @ViewBuilder private var controls: some View {
         HStack(spacing: 12) {
-            if v.recording {
+            if rec.recording {
                 Button { app.stopRecordingLine() } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "stop.fill").font(.system(size: 11))
@@ -216,6 +217,9 @@ struct GuidedRecording: View {
             } else {
                 PrimaryButton(title: "Record", systemImage: "record.circle") { app.startRecordingLine() }
             }
+            if !rec.recording && v.capturedCount > 0 && v.recStep < 9 {
+                SecondaryButton(title: "Build now (\(v.capturedCount))") { app.buildVoiceProfile() }
+            }
         }
     }
 }
@@ -229,7 +233,7 @@ struct VoiceBuilding: View {
             Spacer()
             ProgressView().controlSize(.large).tint(Palette.accent)
             Text("Building your voice profile").font(.ui(20, .semibold)).foregroundStyle(Palette.ink)
-            Text("Analyzing 10 clips on this Mac. This runs as a background job, you can keep working.")
+            Text("\(app.voices.buildStage.isEmpty ? "Analyzing your clips" : app.voices.buildStage) on this Mac. This runs as a background job, you can keep working.")
                 .font(.ui(14)).foregroundStyle(Palette.mute)
                 .multilineTextAlignment(.center).frame(maxWidth: 420).lineSpacing(3)
             VStack(spacing: 8) {
@@ -251,6 +255,8 @@ struct VoiceBuilding: View {
 
 struct VoiceResult: View {
     @Environment(AppModel.self) private var app
+    private var built: EngineProfile? { app.backendProfiles.first { $0.id == app.voices.builtProfileID } }
+
     var body: some View {
         VStack(spacing: 18) {
             Spacer()
@@ -258,16 +264,17 @@ struct VoiceResult: View {
                 .frame(width: 76, height: 76)
                 .overlay(Image(systemName: "checkmark").font(.system(size: 28, weight: .semibold)).foregroundStyle(Palette.good))
             Text("Voice profile ready").font(.ui(24, .semibold)).foregroundStyle(Palette.ink)
-            Text("Ava, narration is now in your library and set as default.")
+            Text("\(built?.name ?? "Your voice") is now in your library and set as default.")
                 .font(.ui(14)).foregroundStyle(Palette.mute)
 
             VStack(spacing: 18) {
-                HStack(alignment: .lastTextBaseline, spacing: 8) {
-                    Text("0.94").font(.mono(46, .semibold)).foregroundStyle(Palette.ink)
-                    Text("similarity").font(.mono(14)).foregroundStyle(Palette.mute)
+                HStack(spacing: 40) {
+                    stat("\(built?.clipCount ?? app.voices.capturedCount)", "clips analyzed")
+                    stat(fmtTime(built?.durationSec ?? 0), "of your voice")
+                    stat(built?.versionLabel ?? "v1", "version")
                 }
                 WaveDots(count: 56, height: 22)
-                Text("A high score means renders will closely match your voice. You can reinforce this profile later by adding more source clips.")
+                Text("Renders will follow the rhythm and tone the app measured from your voice. You can reinforce this profile later by adding more clips.")
                     .font(.ui(13.5)).foregroundStyle(Palette.mute)
                     .multilineTextAlignment(.center).lineSpacing(3).frame(maxWidth: 560)
             }
@@ -284,13 +291,21 @@ struct VoiceResult: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(Space.xl)
     }
+
+    private func stat(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 4) {
+            Text(value).font(.mono(24, .semibold)).foregroundStyle(Palette.ink)
+            Text(label).font(.ui(12.5)).foregroundStyle(Palette.mute)
+        }
+    }
 }
 
 // MARK: - Profile detail
 
 struct ProfileDetail: View {
     @Environment(AppModel.self) private var app
-    private var profile: VoiceProfile? { app.voices.openedProfile }
+    private var profile: EngineProfile? { app.backendProfiles.first { $0.id == app.voices.openedProfileID } }
+    private var isDefault: Bool { app.selectedProfileID == app.voices.openedProfileID }
 
     var body: some View {
         ScrollView {
@@ -304,18 +319,18 @@ struct ProfileDetail: View {
                     }.buttonStyle(.plain)
 
                     HStack(alignment: .center, spacing: 16) {
-                        Avatar(initials: p.initials, size: 56, elevated: !p.isDefault)
+                        Avatar(initials: p.initials, size: 56, elevated: !isDefault)
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(spacing: 8) {
                                 Text(p.name).font(.ui(22, .semibold)).foregroundStyle(Palette.ink)
-                                if p.isDefault { TagPill(text: "default") }
+                                if isDefault { TagPill(text: "default") }
                             }
-                            Text("\(p.version) · SIM \(p.sim) · \(p.clipCount) source clips · \(p.lastUsed)")
+                            Text("\(p.versionLabel) · \(p.clipCount) source clips · \(fmtTime(p.durationSec))")
                                 .font(.mono(12)).foregroundStyle(Palette.mute)
                         }
                         Spacer()
-                        SecondaryButton(title: "Rename") { app.notify("Renaming is a demo action.") }
-                        PrimaryButton(title: "Reinforce") { app.voices.startFlow() }
+                        SecondaryButton(title: "Reinforce") { pickSources(p.id) }
+                        PrimaryButton(title: "Set as default", enabled: !isDefault) { app.setDefaultProfile(p.id) }
                     }
 
                     HStack(alignment: .top, spacing: 20) {
@@ -324,32 +339,40 @@ struct ProfileDetail: View {
                     }
                 }
                 .padding(Space.xl)
+            } else {
+                Text("Profile not found.").font(.ui(14)).foregroundStyle(Palette.mute).padding(Space.xl)
             }
         }
     }
 
-    private func versionHistory(_ p: VoiceProfile) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    private func versionHistory(_ p: EngineProfile) -> some View {
+        let versions = (p.version_log ?? []).sorted { $0.version > $1.version }
+        return VStack(alignment: .leading, spacing: 0) {
             Eyebrow(text: "Version history").padding(.bottom, 16)
             VStack(spacing: 12) {
-                ForEach(p.versions) { v in
+                if versions.isEmpty {
+                    Text("This profile has one version.").font(.ui(13.5)).foregroundStyle(Palette.mute)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                }
+                ForEach(versions) { v in
+                    let current = v.version == (p.version ?? versions.first?.version)
                     HStack(spacing: 14) {
-                        Text(v.label).font(.mono(13, .semibold)).foregroundStyle(Palette.ink).frame(width: 26, alignment: .leading)
+                        Text("v\(v.version)").font(.mono(13, .semibold)).foregroundStyle(Palette.ink).frame(width: 26, alignment: .leading)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(v.note).font(.ui(14, .medium)).foregroundStyle(Palette.ink)
-                            Text("\(v.date) · \(v.sim)").font(.mono(12)).foregroundStyle(Palette.mute)
+                            Text(current ? "Current version" : "Earlier version").font(.ui(14, .medium)).foregroundStyle(Palette.ink)
+                            Text(v.built ?? "").font(.mono(12)).foregroundStyle(Palette.mute)
                         }
                         Spacer()
-                        if v.isCurrent {
+                        if current {
                             Text("current").font(.mono(12)).foregroundStyle(Palette.good)
                         } else {
-                            SecondaryButton(title: "Roll back") { app.notify("Rolled back to \(v.label).") }
+                            SecondaryButton(title: "Roll back") { app.rollbackProfile(p.id, version: v.version) }
                         }
                     }
                     .padding(14)
                     .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(v.isCurrent ? Palette.surfaceElevated : Color.clear))
-                    .hairline(10, color: v.isCurrent ? Palette.hairline : .clear)
+                        .fill(current ? Palette.surfaceElevated : Color.clear))
+                    .hairline(10, color: current ? Palette.hairline : .clear)
                 }
             }
             .padding(Space.md)
@@ -359,12 +382,12 @@ struct ProfileDetail: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func sourceClips(_ p: VoiceProfile) -> some View {
+    private func sourceClips(_ p: EngineProfile) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Eyebrow(text: "Source clips").padding(.bottom, 16)
             VStack(alignment: .leading, spacing: 16) {
-                WaveBars(peaks: p.peaks, color: Palette.stone, height: 30)
-                Text("\(p.clipCount) clips, \(p.totalDuration) total. Drag audio files here to reinforce this profile with more of your voice.")
+                WaveBars(peaks: peaksFor(p.id), color: Palette.stone, height: 30)
+                Text("\(p.clipCount) clips, \(fmtTime(p.durationSec)) total. Drag audio files here to reinforce this profile with more of your voice.")
                     .font(.ui(13.5)).foregroundStyle(Palette.mute).lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 20)
@@ -374,22 +397,43 @@ struct ProfileDetail: View {
                         Text("Delete profile").font(.ui(13.5, .medium)).foregroundStyle(Palette.danger)
                     }.buttonStyle(.plain)
                     Spacer()
-                    Button { app.setDefault(p.id) } label: {
+                    if isDefault {
                         HStack(spacing: 6) {
-                            Text("Set as default").font(.mono(13)).foregroundStyle(Palette.mute)
+                            Text("Default").font(.mono(13)).foregroundStyle(Palette.mute)
                             Image(systemName: "checkmark").font(.system(size: 11)).foregroundStyle(Palette.good)
                         }
-                    }.buttonStyle(.plain)
+                    }
                 }
             }
             .padding(Space.lg)
             .frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading)
             .card(Palette.surface, radius: Radius.card)
-            .onDrop(of: [.fileURL], isTargeted: nil) { _ in
-                app.notify("Added source clips to \(p.name).")
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                loadDropped(providers, into: p.id)
                 return true
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func pickSources(_ pid: String) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.audio, .movie]
+        if panel.runModal() == .OK { app.reinforceProfile(pid, urls: panel.urls) }
+    }
+
+    private func loadDropped(_ providers: [NSItemProvider], into pid: String) {
+        var urls: [URL] = []
+        let group = DispatchGroup()
+        for p in providers {
+            group.enter()
+            _ = p.loadObject(ofClass: URL.self) { url, _ in
+                if let url { urls.append(url) }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { app.reinforceProfile(pid, urls: urls) }
     }
 }

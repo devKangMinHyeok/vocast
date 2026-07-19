@@ -344,76 +344,162 @@ final class AppModel {
         })
     }
 
-    // MARK: Guided recording (per-line, fake live meter)
+    // MARK: Guided recording (real microphone capture)
 
-    private var recTask: Task<Void, Never>?
+    let recorder = AudioRecorder()
+    private var recSessionDir: URL?
+    private var buildTask: Task<Void, Never>?
+
+    private func recordingDir() -> URL {
+        if let d = recSessionDir { return d }
+        let d = FileManager.default.temporaryDirectory.appendingPathComponent("vocast-rec-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        recSessionDir = d
+        return d
+    }
 
     func startRecordingLine() {
-        voices.recording = true
-        voices.recElapsed = 0
-        recTask?.cancel()
-        recTask = Task { @MainActor in
-            while !Task.isCancelled && voices.recording {
-                voices.recElapsed += 0.1
-                let base = 0.55 + 0.35 * sin(voices.recElapsed * 4)
-                voices.level = min(1, max(0.15, base + Double.random(in: -0.08...0.08)))
-                voices.levelDb = -40 + voices.level * 28   // ~ -12 dB at healthy level
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
+        let url = recordingDir().appendingPathComponent(String(format: "%02d.wav", voices.recStep))
+        do {
+            try recorder.start(to: url)
+            voices.recording = true
+            voices.clipURLs[voices.recStep] = url
+        } catch {
+            notify("Could not start the microphone. Allow microphone access and try again.")
         }
     }
 
     func stopRecordingLine() {
+        recorder.stop()
         voices.recording = false
-        recTask?.cancel()
         if voices.recStep < voices.captured.count { voices.captured[voices.recStep] = true }
-        voices.level = 0
-        voices.levelDb = -60
     }
 
     func retakeLine() {
         if voices.recStep < voices.captured.count { voices.captured[voices.recStep] = false }
-        voices.recElapsed = 0
+        voices.clipURLs[voices.recStep] = nil
     }
 
     func nextLine() {
-        if voices.recStep < 9 { voices.recStep += 1; voices.recElapsed = 0 }
+        if voices.recStep < 9 { voices.recStep += 1 }
     }
 
-    func deleteProfile(_ id: VoiceProfile.ID) {
-        voices.profiles.removeAll { $0.id == id }
-        voices.phase = .library
-        notify("Profile deleted.")
+    // MARK: Voice profile build (real)
+
+    func buildVoiceProfile() {
+        let clips = voices.captured.indices
+            .filter { voices.captured[$0] }
+            .compactMap { voices.clipURLs[$0] }
+        guard !clips.isEmpty else { notify("Record at least one line first."); return }
+
+        voices.phase = .building
+        voices.buildProgress = 0
+        voices.buildStage = "Preparing"
+        let start = Date()
+
+        let job = Job(kind: .voiceBuild, title: "Voice profile build",
+                      subtitle: "\(clips.count) clips · analyzing", state: .running,
+                      target: "\(clips.count) clips")
+        tasks.jobs.insert(job, at: 0)
+
+        buildTask?.cancel()
+        buildTask = Task { @MainActor in
+            do {
+                let pid = try await engine.createProfile(name: "My voice")
+                for (i, url) in clips.enumerated() {
+                    try await engine.addRecording(pid: pid, fileURL: url, idx: i)
+                }
+                let jobID = try await engine.buildProfile(pid: pid)
+                voices.buildJobID = jobID
+                while !Task.isCancelled {
+                    let st = try await engine.narrationStatus(jobID)   // build job on /api/jobs
+                    let eta = st.eta_sec ?? 20
+                    let elapsed = Date().timeIntervalSince(start)
+                    voices.buildStage = buildStageText(st.stage)
+                    voices.buildProgress = min(0.95, elapsed / max(eta, 1))
+                    voices.buildETA = max(1, eta - elapsed)
+                    job.progress = voices.buildProgress; job.eta = voices.buildETA
+                    if st.status == "done" {
+                        voices.builtProfileID = pid
+                        selectedProfileID = pid
+                        backendProfiles = (try? await engine.listProfiles()) ?? backendProfiles
+                        voices.phase = .result
+                        job.state = .done; job.timeLabel = "just now"; job.subtitle = "\(clips.count) clips"
+                        complete("Voice profile ready.")
+                        return
+                    }
+                    if st.status == "error" {
+                        voices.phase = .record; job.state = .done
+                        notify("Build failed: \(st.error ?? "unknown error")")
+                        return
+                    }
+                    try await Task.sleep(nanoseconds: 600_000_000)
+                }
+            } catch let e as EngineError {
+                voices.phase = .record; tasks.jobs.removeAll { $0.id == job.id }; notify(engineMessage(e))
+            } catch {
+                voices.phase = .record; tasks.jobs.removeAll { $0.id == job.id }
+                notify("Could not reach the local engine.")
+            }
+        }
     }
 
-    func setDefault(_ id: VoiceProfile.ID) {
-        for i in voices.profiles.indices { voices.profiles[i].isDefault = (voices.profiles[i].id == id) }
+    private func buildStageText(_ s: String?) -> String {
+        switch s {
+        case "reference": return "Analyzing your voice"
+        case "stats": return "Measuring your style"
+        default: return (s?.hasPrefix("prep") == true) ? "Preparing clips" : "Building"
+        }
+    }
+
+    // MARK: Profile actions (real)
+
+    func deleteProfile(_ id: String) {
+        Task { @MainActor in
+            try? await engine.deleteProfile(pid: id)
+            backendProfiles = (try? await engine.listProfiles()) ?? backendProfiles
+            if selectedProfileID == id { selectedProfileID = backendProfiles.first?.id }
+            voices.phase = .library
+            notify("Profile deleted.")
+        }
+    }
+
+    func rollbackProfile(_ id: String, version: Int) {
+        Task { @MainActor in
+            do {
+                try await engine.rollbackProfile(pid: id, version: version)
+                backendProfiles = (try? await engine.listProfiles()) ?? backendProfiles
+                notify("Rolled back to v\(version).")
+            } catch { notify("Could not roll back.") }
+        }
+    }
+
+    func setDefaultProfile(_ id: String) {
+        selectedProfileID = id
+        if let p = backendProfiles.first(where: { $0.id == id }) { settings.defaultProfile = p.name }
         notify("Set as default.")
     }
 
-    // MARK: Voice profile build
+    func refreshProfiles() async {
+        backendProfiles = (try? await engine.listProfiles()) ?? backendProfiles
+    }
 
-    func buildVoiceProfile() {
-        voices.phase = .building
-        voices.buildProgress = 0
-
-        let job = Job(kind: .voiceBuild, title: "Voice profile build, Ava narration",
-                      subtitle: "10 clips · analyzing", state: .running,
-                      target: "10 clips", profile: "Ava, narration")
-        tasks.jobs.insert(job, at: 0)
-
-        drive(4.0, eta: 10, tick: { p, e in
-            self.voices.buildProgress = p
-            self.voices.buildETA = e
-            job.progress = p; job.eta = e
-        }, done: {
-            self.voices.phase = .result
-            for i in self.voices.profiles.indices { self.voices.profiles[i].isDefault = false }
-            job.state = .done
-            job.subtitle = "10 clips · SIM 0.94"
-            job.timeLabel = "just now"
-            self.complete("Voice profile ready, similarity 0.94.")
-        })
+    func reinforceProfile(_ id: String, urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        Task { @MainActor in
+            do {
+                for u in urls { try await engine.addSource(pid: id, fileURL: u) }
+                let jobID = try await engine.buildProfile(pid: id)
+                while true {
+                    let st = try await engine.narrationStatus(jobID)
+                    if st.status == "done" { break }
+                    if st.status == "error" { notify("Reinforce failed."); return }
+                    try await Task.sleep(nanoseconds: 700_000_000)
+                }
+                backendProfiles = (try? await engine.listProfiles()) ?? backendProfiles
+                complete("Profile reinforced.")
+            } catch { notify("Could not reinforce the profile.") }
+        }
     }
 
     // MARK: Denoise (real engine)
