@@ -35,6 +35,16 @@ case "$VARIANT" in
 esac
 echo "▸ Variant: $VARIANT  ($APP_NAME, $BUNDLE_ID, icon $APPICON)"
 
+# Reusing an already staged engine turns a ten-minute rebuild into a Swift-only one.
+# Only safe while the Python side is untouched, so it is opt-in.
+if [ "${VOCAST_SKIP_ENGINE:-0}" = "1" ] && [ -f "$STAGE/api/server.py" ]; then
+  echo "▸ Reusing the staged engine at $STAGE (VOCAST_SKIP_ENGINE=1)"
+  SKIP_ENGINE=1
+else
+  SKIP_ENGINE=0
+fi
+
+if [ "$SKIP_ENGINE" = "0" ]; then
 command -v uv >/dev/null 2>&1 || { echo "❌ uv is required to build the engine"; exit 1; }
 
 echo "▸ Building the embedded engine (main env only) → $STAGE"
@@ -81,6 +91,7 @@ cp -R "$REPO/packages/voxa/voxa" "$STAGE/voxa"
 for d in api voice cli; do cp -R "$PYAPP/$d" "$STAGE/$d"; done
 cp "$PYAPP/pyproject.toml" "$PYAPP/uv.lock" "$STAGE/"
 find "$STAGE" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
+fi   # end of engine staging
 
 echo "▸ Regenerating app icons from the logo mark"
 python3 "$HERE/make_icons.py" >/dev/null
