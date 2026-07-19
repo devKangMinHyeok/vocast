@@ -32,7 +32,7 @@ struct StudioView: View {
         } else {
             HStack(spacing: 14) {
                 ProfileSelector()
-                DotLabel(text: "SIM \(app.currentProfileSim) · default", color: Palette.good, mono: true)
+                DotLabel(text: app.currentProfileFacts, color: Palette.good, mono: true)
                 Spacer()
                 Text("\(app.studio.charCount) / 20,000").font(.mono(12)).foregroundStyle(Palette.mute)
                 Rectangle().fill(Palette.hairline).frame(width: 1, height: 16)

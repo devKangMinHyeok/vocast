@@ -63,7 +63,28 @@ struct EngineProfile: Decodable, Identifiable {
 }
 
 struct NWord: Decodable { let w: String; let s: Double; let e: Double }
-struct NPara: Decodable { let text: String }
+struct NPara: Decodable {
+    let text: String
+    let start: Double?
+    let end: Double?
+    let pns: Double?            // prosody north-star for this paragraph (0...100)
+}
+
+/// One scored take. The engine generates several per paragraph and keeps the best;
+/// the sub-scores are all 0...1 where higher is better (they enter the selection
+/// score as `-PENALTY * (1 - value)`).
+struct NTake: Decodable {
+    let pns: Double?
+    let sel: Double?
+    let ending: Double?         // ending style match
+    let stress: Double?         // syllable energy stress
+    let cliff: Double?          // ending pitch drop (not falling off a cliff)
+    let wdrop: Double?
+    let swallow: Double?        // words not swallowed
+    let rate: Double?           // articulation rate, syllables per second
+    let best: Bool?
+    let para: Int?              // 1-based paragraph, absent on single-paragraph jobs
+}
 
 struct NJob: Decodable {
     let id: String
@@ -73,6 +94,7 @@ struct NJob: Decodable {
     let elapsed_sec: Double?
     let paragraphs: [NPara]?
     let words: [NWord]?
+    let takes: [NTake]?
     let pns: Double?
     let rtf: Double?
     let profile: String?

@@ -94,28 +94,46 @@ struct Scorecard {
     var headline: [HeadlineMetric]
     var sub: [SubMetric]
 
-    static func sample(attention: Bool) -> Scorecard {
-        let pns = HeadlineMetric(key: "PNS", value: "0.88", unit: "", name: "Prosody north-star",
-                                 progress: 0.88, pass: !attention)
-        return Scorecard(
-            gatePassed: !attention,
-            attentionReason: attention ? "energy stress below target" : nil,
-            headline: [
-                HeadlineMetric(key: "SIM", value: "0.94", unit: "", name: "Speaker similarity", progress: 0.94, pass: true),
-                HeadlineMetric(key: "CER", value: "1.8", unit: "%", name: "Word accuracy", progress: 0.9, pass: true),
-                HeadlineMetric(key: "MOS", value: "4.3", unit: "/5", name: "Naturalness", progress: 0.86, pass: true),
-                pns,
-            ],
-            sub: [
-                SubMetric(name: "Boundary breathing", value: "0.91", pass: true),
-                SubMetric(name: "Pitch dynamics", value: "0.85", pass: true),
-                SubMetric(name: "Energy stress", value: attention ? "0.71" : "0.83", pass: !attention),
-                SubMetric(name: "Micro quality", value: "0.93", pass: true),
-            ]
-        )
-    }
+    static let footnote = "PNS is the prosody north-star: rhythm, emphasis, and phrasing scored against your own voice. Sub-scores run 0 to 1, higher is better. Blocks at 82 or above meet the quality bar. Measured on this Mac."
 
-    static let footnote = "SIM matches your voice. CER is misread words. MOS is predicted naturalness. PNS is overall rhythm and emphasis. Values shown are examples."
+    /// Real scorecard for one narration block, from the engine's own scores.
+    /// `para` carries the paragraph's PNS, `take` the winning take's sub-scores.
+    /// Returns nil when the engine reported no prosody metrics for this block, so
+    /// the UI can say so instead of showing invented numbers.
+    static func fromNarration(para: NPara?, take: NTake?, fallbackPNS: Double?) -> Scorecard? {
+        guard let pns = para?.pns ?? fallbackPNS else { return nil }
+        let meetsBar = pns >= 82   // GATES["pns"] in the engine
+        let headline = HeadlineMetric(
+            key: "PNS", value: String(format: "%.1f", pns), unit: "/100",
+            name: "Prosody north-star",
+            progress: min(1, max(0, pns / 100)), pass: meetsBar)
+
+        // Sub-scores enter the engine's selection score as -PENALTY * (1 - value),
+        // so 1.0 is ideal. Only include the ones the engine actually reported.
+        var sub: [SubMetric] = []
+        func add(_ name: String, _ value: Double?) {
+            guard let value else { return }
+            sub.append(SubMetric(name: name, value: String(format: "%.2f", value),
+                                 pass: value >= 0.8))
+        }
+        add("Ending style", take?.ending)
+        add("Energy stress", take?.stress)
+        add("Ending drop", take?.cliff)
+        add("Word clarity", take?.swallow)
+
+        let weakest = sub.filter { !$0.pass }.min { $0.value < $1.value }
+        let reason: String?
+        if !meetsBar {
+            reason = "prosody below the 82 quality bar"
+        } else if let w = weakest {
+            reason = "\(w.name.lowercased()) below target"
+        } else {
+            reason = nil
+        }
+        return Scorecard(gatePassed: meetsBar && weakest == nil,
+                         attentionReason: reason,
+                         headline: [headline], sub: sub)
+    }
 
     static let denoiseFootnote = "Speech preserved is how much of your voice energy was kept. Pause suppression is how much noise was removed from the silences. Measured on this Mac."
 
@@ -156,7 +174,7 @@ struct Block: Identifiable {
     var duration: Double     // seconds
     var version: Int
     var peaks: [Double]
-    var scorecard: Scorecard
+    var scorecard: Scorecard?   // nil when the engine reported no metrics for this block
 }
 
 enum StudioPhase { case empty, rendering, rendered }
@@ -329,7 +347,9 @@ final class DenoiseModel {
     var playing = false
     var abMode: ABMode = .cleaned
     var report = DenoiseReport()
-    var scorecard = Scorecard.sample(attention: false)
+    // Placeholder until a run finishes; the inspector only shows it once the real
+    // report arrives (phase == .result), where fromDenoise replaces it.
+    var scorecard = Scorecard(gatePassed: true, attentionReason: nil, headline: [], sub: [])
     var recentJobs: [DenoiseJob] = SampleData.denoiseJobs
 
     var originalPeaks: [Double] = Waveform.peaks(64, seed: 42, floor: 0.35)

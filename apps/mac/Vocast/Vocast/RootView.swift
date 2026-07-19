@@ -194,7 +194,11 @@ struct InspectorPane: View {
         switch app.area {
         case .studio:
             if app.studio.phase == .rendered, let block = app.studio.selectedBlock {
-                ScorecardView(card: block.scorecard)
+                if let card = block.scorecard {
+                    ScorecardView(card: card)
+                } else {
+                    InspectorEmpty(text: "The engine reported no quality scores for this block.")
+                }
             } else {
                 InspectorEmpty(text: "Render your script to see a quality scorecard for each block here.")
             }

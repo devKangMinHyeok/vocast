@@ -211,7 +211,7 @@ final class AppModel {
 
                     if st.status == "done" {
                         studio.words = st.words ?? []
-                        studio.audioDuration = st.words?.last?.e ?? 0
+                        studio.audioDuration = narrationDuration(st)
                         studio.audioURL = engine.narrationAudioURL(jid)
                         // Real waveform from the composed audio, sliced per block.
                         let full = await RealWaveform.peaks(from: engine.narrationAudioURL(jid), count: 240) ?? []
@@ -248,6 +248,15 @@ final class AppModel {
         }
     }
 
+    /// Total narration length. The word timeline is the finest source, but it can come
+    /// back short or empty when transcription struggles, so fall back to the paragraph
+    /// boundaries the engine composed the audio from.
+    private func narrationDuration(_ st: NJob) -> Double {
+        let fromParas = st.paragraphs?.compactMap { $0.end }.max() ?? 0
+        let fromWords = st.words?.last?.e ?? 0
+        return max(fromParas, fromWords)
+    }
+
     private func narrationStageText(_ stage: String?) -> String {
         switch stage {
         case "reference": return "Preparing the voice"
@@ -268,9 +277,10 @@ final class AppModel {
     }
 
     private func makeRealBlocks(_ st: NJob, text: String, fullPeaks: [Double]) -> [Block] {
+        let metas = st.paragraphs ?? []
         let paras: [String]
-        if let p = st.paragraphs, !p.isEmpty {
-            paras = p.map { $0.text }
+        if !metas.isEmpty {
+            paras = metas.map { $0.text }
         } else {
             paras = text.components(separatedBy: "\n\n")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -280,20 +290,61 @@ final class AppModel {
         let count = max(1, paras.count)
         let per = total / Double(count)
         return paras.enumerated().map { i, t in
+            let meta = i < metas.count ? metas[i] : nil
+            // Real paragraph boundaries when the engine reported them.
+            let span: (Double, Double)? = {
+                guard let s = meta?.start, let e = meta?.end, e > s else { return nil }
+                return (s, e)
+            }()
+            let duration = span.map { $0.1 - $0.0 } ?? (per > 0 ? per : Double(6 + i))
+
             // Slice the real composed waveform for this block's time range.
             let slice: [Double]
             if !fullPeaks.isEmpty {
-                let a = fullPeaks.count * i / count
-                let b = fullPeaks.count * (i + 1) / count
-                slice = Array(fullPeaks[a..<max(a + 1, b)])
+                let a: Int, b: Int
+                if let (s, e) = span, total > 0 {
+                    a = min(fullPeaks.count - 1, max(0, Int(Double(fullPeaks.count) * s / total)))
+                    b = min(fullPeaks.count, max(a + 1, Int(Double(fullPeaks.count) * e / total)))
+                } else {
+                    a = fullPeaks.count * i / count
+                    b = min(fullPeaks.count, max(a + 1, fullPeaks.count * (i + 1) / count))
+                }
+                slice = Array(fullPeaks[a..<b])
             } else {
                 slice = Waveform.peaks(34, seed: UInt64(100 + i * 13))
             }
             return Block(text: t, status: .rendered,
-                         duration: per > 0 ? per : Double(6 + i),
+                         duration: duration,
                          version: 1, peaks: slice,
-                         scorecard: .sample(attention: false))
+                         scorecard: .fromNarration(para: meta,
+                                                   take: bestTake(st.takes, paragraph: i,
+                                                                  paragraphPNS: meta?.pns ?? st.pns),
+                                                   fallbackPNS: st.pns))
         }
+    }
+
+    /// The take the engine kept for a paragraph. Multi-paragraph jobs tag takes with
+    /// a 1-based `para`; single-paragraph jobs leave it out.
+    ///
+    /// Note the `best` flag marks "best so far" while scoring, so several takes carry
+    /// it and the first one is not the winner. The paragraph's own PNS is the winning
+    /// take's PNS, so match on that; otherwise mirror the engine's rule (highest
+    /// selection score among takes within PNS_DOMINANCE of the best PNS).
+    private func bestTake(_ takes: [NTake]?, paragraph i: Int, paragraphPNS: Double?) -> NTake? {
+        guard let takes, !takes.isEmpty else { return nil }
+        let tagged = takes.contains { $0.para != nil }
+        let pool = tagged ? takes.filter { $0.para == i + 1 } : takes
+        guard !pool.isEmpty else { return nil }
+
+        if let target = paragraphPNS,
+           let match = pool.first(where: { abs(($0.pns ?? .infinity) - target) < 0.05 }) {
+            return match
+        }
+        let dominance = 8.0   // PNS_DOMINANCE in the engine
+        let maxPNS = pool.compactMap { $0.pns }.max() ?? 0
+        let contenders = pool.filter { ($0.pns ?? 0) >= maxPNS - dominance }
+        return (contenders.isEmpty ? pool : contenders)
+            .max { ($0.sel ?? -.greatestFiniteMagnitude) < ($1.sel ?? -.greatestFiniteMagnitude) }
     }
 
     // MARK: Studio transport playback (real composed audio)
@@ -373,7 +424,7 @@ final class AppModel {
                         // The regen job is now the current narration (recomposed audio).
                         studio.renderJobID = jid
                         studio.words = st.words ?? []
-                        studio.audioDuration = st.words?.last?.e ?? 0
+                        studio.audioDuration = narrationDuration(st)
                         studio.audioURL = engine.narrationAudioURL(jid)
                         let full = await RealWaveform.peaks(from: engine.narrationAudioURL(jid), count: 240) ?? []
                         studio.transportPeaks = full.isEmpty ? Waveform.peaks(90, seed: 500) : full
@@ -713,7 +764,15 @@ final class AppModel {
     }
 
     /// Per-profile SIM is not surfaced by a simple render yet; shown as an example.
-    var currentProfileSim: String { "0.94" }
+    /// Facts about the selected voice. The engine does not score a profile against
+    /// the speaker, so this reports what it does know rather than a similarity number.
+    var currentProfileFacts: String {
+        let p = selectedProfileID.flatMap { id in backendProfiles.first { $0.id == id } }
+            ?? backendProfiles.first
+        guard let p else { return "no voice profile" }
+        let clips = p.clipCount
+        return clips > 0 ? "\(p.versionLabel) · \(clips) clips" : p.versionLabel
+    }
 
     var currentProfileInitials: String {
         let name = currentProfileName.trimmingCharacters(in: .whitespaces)
