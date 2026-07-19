@@ -272,7 +272,7 @@ struct Transport: View {
             Text(fmtTime(app.studio.currentTime)).font(.mono(13)).foregroundStyle(Palette.body)
                 .frame(width: 40, alignment: .leading)
             GeometryReader { geo in
-                WaveBars(peaks: Waveform.peaks(90, seed: 500, floor: 0.2),
+                WaveBars(peaks: app.studio.transportPeaks.isEmpty ? Waveform.peaks(90, seed: 500, floor: 0.2) : app.studio.transportPeaks,
                          color: Palette.stone, activeColor: Palette.accent,
                          progress: app.studio.currentTime / total, height: 34)
                     .contentShape(Rectangle())

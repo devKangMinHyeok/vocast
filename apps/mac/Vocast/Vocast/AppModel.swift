@@ -212,7 +212,10 @@ final class AppModel {
                         studio.words = st.words ?? []
                         studio.audioDuration = st.words?.last?.e ?? 0
                         studio.audioURL = engine.narrationAudioURL(jid)
-                        studio.blocks = makeRealBlocks(st, text: text)
+                        // Real waveform from the composed audio, sliced per block.
+                        let full = await RealWaveform.peaks(from: engine.narrationAudioURL(jid), count: 240) ?? []
+                        studio.transportPeaks = full.isEmpty ? Waveform.peaks(90, seed: 500) : full
+                        studio.blocks = makeRealBlocks(st, text: text, fullPeaks: full)
                         studio.selectedBlockID = studio.blocks.first?.id
                         studio.karaokeWordIndex = 0
                         studio.currentTime = 0
@@ -263,7 +266,7 @@ final class AppModel {
         return n / m
     }
 
-    private func makeRealBlocks(_ st: NJob, text: String) -> [Block] {
+    private func makeRealBlocks(_ st: NJob, text: String, fullPeaks: [Double]) -> [Block] {
         let paras: [String]
         if let p = st.paragraphs, !p.isEmpty {
             paras = p.map { $0.text }
@@ -273,13 +276,22 @@ final class AppModel {
                 .filter { !$0.isEmpty }
         }
         let total = st.words?.last?.e ?? 0
-        let per = paras.isEmpty ? 0 : total / Double(paras.count)
+        let count = max(1, paras.count)
+        let per = total / Double(count)
         return paras.enumerated().map { i, t in
-            Block(text: t, status: .rendered,
-                  duration: per > 0 ? per : Double(6 + i),
-                  version: 1,
-                  peaks: Waveform.peaks(34, seed: UInt64(100 + i * 13)),
-                  scorecard: .sample(attention: false))
+            // Slice the real composed waveform for this block's time range.
+            let slice: [Double]
+            if !fullPeaks.isEmpty {
+                let a = fullPeaks.count * i / count
+                let b = fullPeaks.count * (i + 1) / count
+                slice = Array(fullPeaks[a..<max(a + 1, b)])
+            } else {
+                slice = Waveform.peaks(34, seed: UInt64(100 + i * 13))
+            }
+            return Block(text: t, status: .rendered,
+                         duration: per > 0 ? per : Double(6 + i),
+                         version: 1, peaks: slice,
+                         scorecard: .sample(attention: false))
         }
     }
 
@@ -540,6 +552,13 @@ final class AppModel {
                         denoise.report = DenoiseReport(from: st.report, mode: mode, engine: st.engine ?? "")
                         denoise.scorecard = .fromDenoise(denoise.report)
                         denoise.abMode = .cleaned
+                        // Real A/B waveforms from the preview audio.
+                        if let op = await RealWaveform.peaks(from: engine.denoiseAudioURL(jid, kind: "orig"), count: 64) {
+                            denoise.originalPeaks = op
+                        }
+                        if let cp = await RealWaveform.peaks(from: engine.denoiseAudioURL(jid, kind: "clean"), count: 64) {
+                            denoise.cleanedPeaks = cp
+                        }
                         denoise.phase = .result
                         job.state = .done
                         job.timeLabel = "just now"

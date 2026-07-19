@@ -188,6 +188,7 @@ final class StudioModel {
     var audioURL: URL?
     var words: [NWord] = []
     var audioDuration: Double = 0
+    var transportPeaks: [Double] = []
 
     var charCount: Int { scriptText.count }
     var totalDuration: Double {

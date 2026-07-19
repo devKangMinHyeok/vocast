@@ -103,9 +103,10 @@ final class Sidecar {
     /// terminate() cleans up directly). Fall back to `uv run` if there is no venv.
     private func launcher(in dir: URL) -> (exec: URL, args: [String])? {
         let fm = FileManager.default
-        let venvPython = dir.appendingPathComponent(".venv/bin/python")
-        if fm.isExecutableFile(atPath: venvPython.path) {
-            return (venvPython, ["api/server.py"])
+        // Bundled engine uses runtime/.venv; the dev repo uses .venv.
+        for rel in ["runtime/.venv/bin/python", ".venv/bin/python"] {
+            let py = dir.appendingPathComponent(rel)
+            if fm.isExecutableFile(atPath: py.path) { return (py, ["api/server.py"]) }
         }
         let uvCandidates = [
             "\(NSHomeDirectory())/.local/bin/uv",
