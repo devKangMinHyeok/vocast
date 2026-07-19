@@ -183,8 +183,8 @@ const ProsodyBody: React.FC = () => (
     </p>
 
     <Prose.Figure
-      src={asset("/blog/figure-quality.png")}
-      caption="Every render returns a scorecard. A miss on any axis rejects the take, it does not average away."
+      src={asset("/blog/figure-prosody-curve.png")}
+      caption="Pitch, pause and ending shape for one sentence, scored against a human reading of the same line."
     />
 
     <Prose.Heading id="family">One score is not enough</Prose.Heading>
@@ -253,8 +253,8 @@ const CloneBody: React.FC = () => (
     </p>
 
     <Prose.Figure
-      src={asset("/blog/figure-profile.png")}
-      caption="The guided capture: read the prompt, watch the build, get a similarity score you can trust."
+      src={asset("/blog/figure-guided-capture.png")}
+      caption="Ten short guided lines, chosen to cover the sounds that trip cloning up. About ninety seconds in total."
     />
 
     <Prose.Heading id="reusable">A profile you own</Prose.Heading>
@@ -298,8 +298,8 @@ const LongformBody: React.FC = () => (
     </p>
 
     <Prose.Figure
-      src={asset("/blog/figure-longform.png")}
-      caption="A long script rendered as paragraph blocks, each one independently inspectable and replaceable."
+      src={asset("/blog/figure-paragraph-blocks.png")}
+      caption="A long script rendered as paragraph blocks. Regenerate one in place while everything around it stays."
     />
 
     <Prose.Heading id="paragraph">Fix the paragraph, keep the take</Prose.Heading>
@@ -347,8 +347,8 @@ const LocalBody: React.FC = () => (
     </p>
 
     <Prose.Figure
-      src={asset("/blog/figure-audio.png")}
-      caption="Everything, capture through render, happens on the same machine. Nothing to upload, nothing to leak."
+      src={asset("/blog/figure-on-device.png")}
+      caption="Voiceprint, scripts and renders stay on the machine. No account, no upload, no server in the loop."
     />
 
     <Prose.Heading id="one-time">One-time, not a meter</Prose.Heading>
