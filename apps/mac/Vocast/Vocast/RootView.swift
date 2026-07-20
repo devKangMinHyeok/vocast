@@ -23,6 +23,21 @@ struct RootView: View {
                 ToolbarItem(placement: .principal) {
                     Color.clear.frame(width: 1, height: 30).accessibilityHidden(true)
                 }
+                // These have to be real toolbar items. The top bar is drawn under the
+                // titlebar so the traffic lights can share its row, and AppKit's titlebar
+                // takes every click in that strip as a window drag. A SwiftUI button
+                // placed there looks right and does nothing. Only the title and subhead
+                // stay in the drawn bar, since text does not need to be clicked.
+                ToolbarItem(placement: .primaryAction) {
+                    HStack(spacing: 12) {
+                        ActivityIndicatorBar()
+                        if app.firstRunComplete { PrimaryActionButton() }
+                        InspectorToggle()
+                    }
+                    // Sit at the trailing edge of the detail pane, where the design puts
+                    // them, rather than out over the inspector.
+                    .padding(.trailing, app.inspectorVisible ? kInspectorWidth - 12 : 0)
+                }
             }
             .toolbarBackground(.hidden, for: .windowToolbar)
             .preferredColorScheme(.dark)
@@ -92,31 +107,13 @@ struct DetailPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TopBar(title: app.area.title, subhead: app.area.subhead) {
-                ActivityIndicatorBar()
-                primaryAction
-                InspectorToggle()
-            }
+            // The controls that used to live here are toolbar items now; see the
+            // .toolbar in RootView for why. This bar keeps the title and subhead.
+            TopBar(title: app.area.title, subhead: app.area.subhead) { EmptyView() }
             areaContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .background(Palette.canvas)
-    }
-
-    @ViewBuilder private var primaryAction: some View {
-        if app.area == .settings {
-            Button { } label: {
-                Image(systemName: "plus").font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Palette.onWhite)
-                    .frame(width: 28, height: 28)
-                    .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Palette.white))
-            }
-            .buttonStyle(.plain)
-        } else {
-            PrimaryButton(title: app.area.primaryActionLabel, systemImage: "plus") {
-                app.primaryAction()
-            }
-        }
     }
 
     @ViewBuilder private var areaContent: some View {
@@ -126,6 +123,18 @@ struct DetailPane: View {
         case .denoise:  DenoiseView()
         case .tasks:    TasksView()
         case .settings: SettingsView()
+        }
+    }
+}
+
+/// The area's primary action, as a toolbar item so it actually receives clicks.
+struct PrimaryActionButton: View {
+    @Environment(AppModel.self) private var app
+    var body: some View {
+        if app.area != .settings {
+            PrimaryButton(title: app.area.primaryActionLabel, systemImage: "plus") {
+                app.primaryAction()
+            }
         }
     }
 }

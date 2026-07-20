@@ -113,6 +113,9 @@ struct NewVoiceTile: View {
             .background(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                 .foregroundStyle(Palette.hairline))
+            // The dashed border only paints its outline, so without this the tile's
+            // interior was not hit-testable and only the glyph and labels responded.
+            .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         }
         .buttonStyle(.plain)
     }
