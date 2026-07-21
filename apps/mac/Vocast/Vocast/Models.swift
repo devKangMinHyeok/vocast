@@ -192,6 +192,10 @@ final class StudioModel {
     var blocks: [Block] = []
     var selectedBlockID: Block.ID?
     var viewMode: StudioViewMode = .blocks
+    /// Whether the voice-picker dropdown in the sub-toolbar is open, and which
+    /// row the keyboard has highlighted while it is.
+    var voiceMenuOpen = false
+    var voiceMenuHighlight = 0
 
     // Transport
     var playing = false

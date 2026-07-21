@@ -1,17 +1,63 @@
 import SwiftUI
+import AppKit
 
 struct StudioView: View {
     @Environment(AppModel.self) private var app
+    @State private var voiceKeyMonitor: Any?
 
     var body: some View {
-        VStack(spacing: 0) {
-            subToolbar
-            if app.studio.phase == .rendered {
-                RenderedStudio()
-            } else {
-                ComposingStudio()
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                subToolbar
+                if app.studio.phase == .rendered {
+                    RenderedStudio()
+                } else {
+                    ComposingStudio()
+                }
+            }
+            // Voice-picker dropdown: a full-pane catcher (a click anywhere closes
+            // it) sits beneath the panel, which floats just under the trigger.
+            if app.studio.voiceMenuOpen {
+                Color.clear.contentShape(Rectangle())
+                    .onTapGesture { app.studio.voiceMenuOpen = false }
+                VoiceMenuPanel()
+                    .padding(.leading, Space.xl)
+                    .padding(.top, 46)
+                    .transition(.opacity)
             }
         }
+        .animation(Motion.calm, value: app.studio.voiceMenuOpen)
+        // Keyboard for the voice dropdown lives here, on a view that is always
+        // present, driving the observable highlight so there is no stale state.
+        .onAppear { installVoiceKeys() }
+        .onDisappear { removeVoiceKeys() }
+    }
+
+    private func installVoiceKeys() {
+        guard voiceKeyMonitor == nil else { return }
+        voiceKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard app.studio.voiceMenuOpen else { return event }
+            let profiles = app.backendProfiles
+            let last = max(0, profiles.count - 1)
+            switch event.keyCode {
+            case 53:                                              // esc
+                app.studio.voiceMenuOpen = false; return nil
+            case 126:                                             // up arrow
+                app.studio.voiceMenuHighlight = max(0, app.studio.voiceMenuHighlight - 1); return nil
+            case 125:                                             // down arrow
+                app.studio.voiceMenuHighlight = min(last, app.studio.voiceMenuHighlight + 1); return nil
+            case 36, 76:                                          // return / enter
+                if profiles.indices.contains(app.studio.voiceMenuHighlight) {
+                    app.selectedProfileID = profiles[app.studio.voiceMenuHighlight].id
+                }
+                app.studio.voiceMenuOpen = false; return nil
+            default:
+                return event
+            }
+        }
+    }
+    private func removeVoiceKeys() {
+        if let m = voiceKeyMonitor { NSEvent.removeMonitor(m); voiceKeyMonitor = nil }
     }
 
     // Sub-toolbar changes with phase.
@@ -31,8 +77,7 @@ struct StudioView: View {
             .overlay(alignment: .bottom) { Hairline() }
         } else {
             HStack(spacing: 14) {
-                ProfileSelector()
-                LanguageChip(language: app.currentVoiceLanguage)
+                VoiceTrigger()
                 DotLabel(text: app.currentProfileFacts, color: Palette.good, mono: true)
                 Spacer()
                 Text("\(app.studio.charCount) / 20,000").font(.mono(12)).foregroundStyle(Palette.mute)
@@ -45,53 +90,6 @@ struct StudioView: View {
             .padding(.horizontal, Space.xl).frame(height: kBarHeight)
             .overlay(alignment: .bottom) { Hairline() }
         }
-    }
-}
-
-// MARK: - Profile selector chip
-
-struct ProfileSelector: View {
-    @Environment(AppModel.self) private var app
-
-    private var chip: some View {
-        HStack(spacing: 10) {
-            Avatar(initials: app.currentProfileInitials, size: 26)
-            Text(app.currentProfileName).font(.ui(13.5, .medium)).foregroundStyle(Palette.ink).fixedSize()
-            Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.mute)
-        }
-        .padding(.leading, 6).padding(.trailing, 12).frame(height: 38)
-        .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Palette.surfaceElevated))
-        .hairline(Radius.control, color: Palette.hairline)
-    }
-
-    var body: some View {
-        // Clicking the chip opens a menu of the real voice profiles from the engine,
-        // as the chevron implies. The chip carries its own chevron, so the menu's
-        // own indicator is hidden.
-        Menu {
-            if app.backendProfiles.isEmpty {
-                Text("No voice profiles yet").foregroundStyle(Palette.mute)
-            }
-            ForEach(app.backendProfiles) { p in
-                Button {
-                    app.selectedProfileID = p.id
-                } label: {
-                    if app.selectedProfileID == p.id {
-                        Label(p.name, systemImage: "checkmark")
-                    } else {
-                        Text(p.name)
-                    }
-                }
-            }
-        } label: {
-            chip
-        }
-        // .button + plain renders our custom chip as-is (borderlessButton would
-        // collapse it to a compact system control); the chip carries its own chevron.
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
     }
 }
 
