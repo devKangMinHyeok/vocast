@@ -194,7 +194,7 @@ struct DenoiseProcessing: View {
                 HStack {
                     Text("\(Int(app.denoise.progress * 100))%").font(.mono(12)).foregroundStyle(Palette.mute)
                     Spacer()
-                    Text("ETA \(fmtTime(app.denoise.eta))").font(.mono(12)).foregroundStyle(Palette.mute)
+                    Text(etaLabel(app.denoise.eta)).font(.mono(12)).foregroundStyle(Palette.mute)
                 }
             }.frame(maxWidth: 420)
             Spacer()

@@ -74,7 +74,7 @@ struct TaskRow: View {
 
     @ViewBuilder private var trailingMeta: some View {
         switch job.state {
-        case .running: Text("ETA \(fmtTime(job.eta))").font(.mono(12)).foregroundStyle(Palette.accent)
+        case .running: Text(etaLabel(job.eta)).font(.mono(12)).foregroundStyle(Palette.accent)
         case .queued:  Text(app.s["taskWaiting"]).font(.mono(12)).foregroundStyle(Palette.ash)
         case .done:    Text(job.timeLabel).font(.mono(12)).foregroundStyle(Palette.good)
         case .failed:  Text(app.s["taskFailed"]).font(.mono(12)).foregroundStyle(Palette.danger)

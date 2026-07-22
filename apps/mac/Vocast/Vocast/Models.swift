@@ -72,6 +72,13 @@ func fmtTime(_ seconds: Double) -> String {
     return String(format: "%d:%02d", s / 60, s % 60)
 }
 
+/// ETA label for a running job. Remaining time floors near zero, so a job that
+/// outruns its estimate would read "ETA 0:01" indefinitely. Past that point say
+/// it is wrapping up instead of showing a number that stopped moving.
+func etaLabel(_ seconds: Double) -> String {
+    seconds <= 2 ? "finishing" : "ETA \(fmtTime(seconds))"
+}
+
 // MARK: - Quality scorecard
 
 struct HeadlineMetric: Identifiable {

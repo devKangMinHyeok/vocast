@@ -326,7 +326,7 @@ struct JobDetailInspector: View {
                     HStack {
                         Text("\(Int(job.progress * 100))%").font(.mono(12)).foregroundStyle(Palette.mute)
                         Spacer()
-                        Text("ETA \(fmtTime(job.eta))").font(.mono(12)).foregroundStyle(Palette.mute)
+                        Text(etaLabel(job.eta)).font(.mono(12)).foregroundStyle(Palette.mute)
                     }
                 }
                 .padding(16).card(Palette.surfaceCard, radius: 10)

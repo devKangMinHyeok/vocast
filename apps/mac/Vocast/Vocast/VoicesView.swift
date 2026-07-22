@@ -299,7 +299,7 @@ struct VoiceBuilding: View {
                 HStack {
                     Text("\(Int(app.voices.buildProgress * 100))%").font(.mono(12)).foregroundStyle(Palette.mute)
                     Spacer()
-                    Text("ETA \(fmtTime(app.voices.buildETA))").font(.mono(12)).foregroundStyle(Palette.mute)
+                    Text(etaLabel(app.voices.buildETA)).font(.mono(12)).foregroundStyle(Palette.mute)
                 }
             }
             .frame(maxWidth: 420)
