@@ -497,6 +497,26 @@ def _install_parent_watchdog():
     threading.Thread(target=_watch, daemon=True).start()
 
 
+def _start_stale_watchdog(interval=60):
+    """세션 중 멈춘 작업 감지. 시작 시 정리(reconcile_interrupted)는 재시작 케이스만
+    커버하므로, 엔진이 오래 돌 때 워커가 죽어 멈춘 작업을 주기적으로 잡는다.
+    데몬 스레드라 서버 종료를 막지 않는다."""
+    import threading
+    import time
+
+    def _sweep():
+        while True:
+            time.sleep(interval)
+            try:
+                n = profiles.reconcile_stale() + dnjobs.reconcile_stale()
+                if n:
+                    print(f"워치독: 멈춘 작업 {n}건을 오류로 표시")
+            except Exception:
+                pass  # 스윕 실패가 서버를 죽이지 않게
+
+    threading.Thread(target=_sweep, daemon=True).start()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8756)
@@ -507,6 +527,7 @@ def main():
     stale = profiles.reconcile_interrupted() + dnjobs.reconcile_interrupted()
     if stale:
         print(f"정리: 중단된 작업 {stale}건을 오류로 표시")
+    _start_stale_watchdog()
     ensure_ffmpeg()
     feats = "노이즈 제거" + (" + 보이스 클로닝" if clone_available() else
                             " (클로닝: 미설치 — voice/requirements-voice.txt)")

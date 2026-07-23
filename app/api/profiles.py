@@ -722,3 +722,30 @@ def reconcile_interrupted():
             storage.store.write_doc("history", jid, meta)
             n += 1
     return n
+
+
+# 10분 무진행이면 멈춘 것으로 본다. 진행 이벤트마다 문서가 다시 써지므로, 콜드
+# 모델 로드(~1분)나 느린 테이크 한 번보다 충분히 길어 오탐하지 않는다.
+STALE_SILENCE_SEC = 600
+
+
+def reconcile_stale(silence=STALE_SILENCE_SEC):
+    """세션 중 워치독: reconcile_interrupted가 재시작만 커버하는 것과 달리, 엔진이
+    오래 돌면서 워커가 죽어 작업이 비종료 상태로 멈추는 경우를 잡는다.
+
+    진행 이벤트마다 작업 문서가 다시 써지므로 문서 mtime이 하트비트다. 비종료
+    작업의 문서가 silence초 넘게 갱신되지 않았으면 멈춘 것으로 보고 오류 처리한다.
+    실제로 도는(진행 중인) 작업은 최근에 써졌으므로 건드리지 않는다."""
+    now = time.time()
+    n = 0
+    for jid in storage.store.list_ids("history"):
+        meta = storage.store.read_doc("history", jid)
+        if not meta or meta.get("status") not in _ACTIVE_STATUSES:
+            continue
+        mt = storage.store.doc_mtime("history", jid)
+        if mt is not None and now - mt > silence:
+            meta["status"] = "error"
+            meta["error"] = meta.get("error") or "stuck (no progress)"
+            storage.store.write_doc("history", jid, meta)
+            n += 1
+    return n

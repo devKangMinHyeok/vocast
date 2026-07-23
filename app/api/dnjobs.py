@@ -151,6 +151,27 @@ def reconcile_interrupted():
     return n
 
 
+STALE_SILENCE_SEC = 600
+
+
+def reconcile_stale(silence=STALE_SILENCE_SEC):
+    """세션 중 워치독(denoise용). 문서 mtime을 하트비트로, silence초 넘게 갱신이
+    없는 비종료 작업을 멈춘 것으로 보고 오류 처리한다. profiles와 짝을 이룬다."""
+    now = time.time()
+    n = 0
+    for jid in storage.store.list_ids("denoise"):
+        meta = storage.store.read_doc("denoise", jid)
+        if not meta or meta.get("status") not in _ACTIVE_STATUSES:
+            continue
+        mt = storage.store.doc_mtime("denoise", jid)
+        if mt is not None and now - mt > silence:
+            meta["status"] = "error"
+            meta["error"] = meta.get("error") or "stuck (no progress)"
+            storage.store.write_doc("denoise", jid, meta)
+            n += 1
+    return n
+
+
 def delete_dnjob(jid):
     with _LOCK:
         DNJOBS.pop(jid, None)

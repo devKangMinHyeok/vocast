@@ -72,6 +72,11 @@ class Storage(ABC):
     def ensure_local(self, kind: str, eid: str) -> None:
         """엔티티 blob을 로컬에서 읽을 수 있게 보장(클라우드 다운로드)."""
 
+    def doc_mtime(self, kind: str, eid: str):
+        """문서 마지막 수정 시각(epoch 초). 진행마다 문서가 다시 써지므로 작업의
+        하트비트로 쓴다(세션 중 멈춤 감지). 알 수 없으면 None."""
+        return None
+
 
 class LocalStorage(Storage):
     """파일시스템 구현 — 사용자 홈의 폴더 트리. 현재 동작을 그대로 재현."""
@@ -98,6 +103,12 @@ class LocalStorage(Storage):
 
     def read_doc(self, kind, eid):
         return self.read_json(self._meta_path(kind, eid))
+
+    def doc_mtime(self, kind, eid):
+        try:
+            return os.path.getmtime(self._meta_path(kind, eid))
+        except OSError:
+            return None
 
     def write_doc(self, kind, eid, obj):
         self.entity_dir(kind, eid)  # 디렉토리 보장
