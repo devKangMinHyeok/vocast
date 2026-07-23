@@ -7,10 +7,37 @@ voxa/models에 번들되어 오프라인으로 바로 동작한다.
 저장 위치는 HF_HOME이 가리키는 곳(맥 앱은 앱 소유 폴더로 지정 → 앱 바운더리에 격리).
 리비전을 고정해 재현 가능하게 받는다. 진행률은 디스크 용량으로 실측한다.
 """
+import contextlib
 import os
 import threading
 
+import huggingface_hub
 from huggingface_hub import snapshot_download
+
+
+@contextlib.contextmanager
+def _online():
+    """이 블록 동안만 HuggingFace 허브 접속을 허용한다.
+
+    엔진은 기본적으로 오프라인(HF_HUB_OFFLINE=1)으로 뜬다 — 캐시된 모델이
+    있는데도 허브에 리비전을 확인하러 나갔다가 오프라인 상태에서 무한 대기하는
+    사고를 막기 위해서다(렌더가 'reference' 단계에서 멈추던 원인). 모델
+    다운로드만은 네트워크가 필요하므로 그 구간에서만 오프라인을 잠시 해제한다.
+    huggingface_hub은 HF_HUB_OFFLINE을 import 시점에 constants로 굳히므로,
+    런타임 토글은 그 constants 값을 직접 바꿔야 반영된다(env는 함께 맞춰둔다).
+    """
+    prev_env = os.environ.get("HF_HUB_OFFLINE")
+    prev_const = huggingface_hub.constants.HF_HUB_OFFLINE
+    os.environ["HF_HUB_OFFLINE"] = "0"
+    huggingface_hub.constants.HF_HUB_OFFLINE = False
+    try:
+        yield
+    finally:
+        huggingface_hub.constants.HF_HUB_OFFLINE = prev_const
+        if prev_env is None:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        else:
+            os.environ["HF_HUB_OFFLINE"] = prev_env
 
 # key -> (repo_id, pinned_revision, approx_size_mb)
 MODELS = {
@@ -78,7 +105,9 @@ def start_download(tier: str) -> bool:
                 repo, rev, _ = MODELS[k]
                 _STATE["current"] = k
                 # 이미 완전히 받아져 있으면 즉시 반환, 부분이면 이어받아 완성.
-                snapshot_download(repo, revision=rev)  # HF_HOME 아래로 격리 저장
+                # 다운로드 구간에서만 오프라인 해제(엔진 기본은 오프라인).
+                with _online():
+                    snapshot_download(repo, revision=rev)  # HF_HOME 아래로 격리 저장
             _STATE["done"] = True
         except Exception as e:  # noqa: BLE001
             _STATE["error"] = str(e)[-300:]

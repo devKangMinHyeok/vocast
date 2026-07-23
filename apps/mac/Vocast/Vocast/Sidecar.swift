@@ -46,6 +46,14 @@ final class Sidecar {
         // Same for torch.hub, which fetches the UTMOS model behind the prosody score.
         // Without this it lands in ~/.cache/torch and outlives the app.
         env["TORCH_HOME"] = Sidecar.modelsDir().appendingPathComponent("torch").path
+        // Run the engine offline by default. Models are downloaded once (via the
+        // /api/models/download path, which lifts this) and then everything runs
+        // on-device. Without this, Hugging Face phones home to check the revision
+        // even for a fully-cached model, and if the machine is offline that call
+        // hangs forever — which is what stalled renders at the "reference"
+        // (Whisper) stage. Cache hits are instant with this set.
+        env["HF_HUB_OFFLINE"] = "1"
+        env["TRANSFORMERS_OFFLINE"] = "1"
         proc.environment = env
 
         // Pipe logs to a temp file for debugging.

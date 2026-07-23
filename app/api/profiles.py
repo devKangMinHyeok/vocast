@@ -438,13 +438,14 @@ def start_clone_job(text, fast, ref_path=None, profile_id=None,
     on_progress = _make_progress(job)
 
     def run():
-        # 이 작업의 음성 언어를 스레드 컨텍스트에 심는다 (Whisper 전사 기준).
-        set_speech_language(profile_lang(pid) if pid else "ko")
         jdir = _history_dir(job_id)
         os.makedirs(jdir, exist_ok=True)
         out = os.path.join(jdir, "output.wav")
         t_start = time.time()
         try:
+            # 이 작업의 음성 언어를 스레드 컨텍스트에 심는다 (Whisper 전사 기준).
+            # try 안에 둬야 여기서 실패해도 잡이 조용히 멈추지 않고 오류로 남는다.
+            set_speech_language(profile_lang(profile_id) if profile_id else "ko")
             if profile_id:
                 paths = profile_paths(profile_id)
                 if not paths:
@@ -508,13 +509,14 @@ def start_regen_job(parent_id, index):
     on_progress = _make_progress(job)
 
     def run():
-        # 이 작업의 음성 언어를 스레드 컨텍스트에 심는다 (Whisper 전사 기준).
-        set_speech_language(profile_lang(pid) if pid else "ko")
         jdir = _history_dir(job_id)
         os.makedirs(jdir, exist_ok=True)
         out = os.path.join(jdir, "output.wav")
         t_start = time.time()
         try:
+            # 음성 언어를 스레드 컨텍스트에 심는다 (Whisper 전사 기준).
+            # try 안에 둬야 실패해도 잡이 조용히 멈추지 않고 오류로 남는다.
+            set_speech_language(profile_lang(pid) if pid else "ko")
             regenerate_paragraph(src, paras, index, paths[0], paths[1],
                                  paths[2], out, fast=settings.get("fast", False),
                                  takes=settings.get("takes", DEFAULT_TAKES),
@@ -610,9 +612,10 @@ def start_performance_job(parent_id, index, rec_path, denoise=True):
 
     _ensure_dirs()
     settings = parent.get("settings") or {}
+    pid = parent.get("profile_id")
     job_id = uuid.uuid4().hex[:10]
     job = _new_job(job_id, parent["text"], parent.get("profile"),
-                   parent.get("profile_id"), settings,
+                   pid, settings,
                    title=parent.get("title"),
                    parent={"job": parent_id, "kind": "performance",
                            "index": index},
@@ -627,13 +630,14 @@ def start_performance_job(parent_id, index, rec_path, denoise=True):
     on_progress = _make_progress(job)
 
     def run():
-        # 이 작업의 음성 언어를 스레드 컨텍스트에 심는다 (Whisper 전사 기준).
-        set_speech_language(profile_lang(pid) if pid else "ko")
         jdir = _history_dir(job_id)
         os.makedirs(jdir, exist_ok=True)
         out = os.path.join(jdir, "output.wav")
         t_start = time.time()
         try:
+            # 음성 언어를 스레드 컨텍스트에 심는다 (Whisper 전사 기준).
+            # try 안에 둬야 실패해도 잡이 조용히 멈추지 않고 오류로 남는다.
+            set_speech_language(profile_lang(pid) if pid else "ko")
             perf, perf_text = prepare_performance(rec_path, jdir,
                                                   denoise=denoise)
             job["perf_text"] = perf_text  # "이렇게 들렸어요" (투명성)
