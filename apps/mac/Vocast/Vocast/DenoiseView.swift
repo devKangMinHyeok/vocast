@@ -224,7 +224,8 @@ struct DenoiseResult: View {
                 HStack(spacing: 16) {
                     Segmented(options: [(ABMode.original, app.s["dnOriginal"]), (.cleaned, app.s["dnCleaned"])],
                               selection: Binding(get: { d.abMode }, set: { app.denoiseSetAB($0) }))
-                    PlayCircle(playing: d.playing, size: 42, filled: true) { app.denoisePlayToggle() }
+                    PlayCircle(playing: d.playing, size: 42, filled: true,
+                               help: app.s["tipPlayPause"]) { app.denoisePlayToggle() }
                     Text(app.s["dnNow"].replacingOccurrences(
                         of: "{side}", with: app.s[d.abMode == .cleaned ? "dnCleaned" : "dnOriginal"]))
                         .font(.mono(13)).foregroundStyle(Palette.mute)
