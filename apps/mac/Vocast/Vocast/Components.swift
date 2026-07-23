@@ -289,6 +289,8 @@ struct SecondaryButton: View {
 // Small bordered square icon button (regenerate / scorecard on a block).
 struct IconButton: View {
     var systemImage: String
+    /// Hover tooltip so an icon-only button says what it does before it is clicked.
+    var help: String = ""
     var action: () -> Void
     var body: some View {
         Button(action: action) {
@@ -301,6 +303,7 @@ struct IconButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(help)
     }
 }
 
@@ -309,6 +312,7 @@ struct PlayCircle: View {
     var playing: Bool
     var size: CGFloat = 34
     var filled: Bool = true
+    var help: String = ""
     var action: () -> Void
     var body: some View {
         Button(action: action) {
@@ -321,6 +325,7 @@ struct PlayCircle: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .help(help)
     }
 }
 

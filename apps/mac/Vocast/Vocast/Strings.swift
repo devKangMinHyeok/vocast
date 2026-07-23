@@ -84,6 +84,13 @@ struct Strings {
         "korean": "Korean", "english": "English",
         "langOfEnglish": "English", "langOfKorean": "Korean",
 
+        // Hover tooltips for icon-only buttons.
+        "tipPlayBlock": "Play from this paragraph",
+        "tipPlayPause": "Play / pause",
+        "tipRegen": "Re-render this paragraph",
+        "tipScorecard": "Show quality scorecard",
+        "tipInspector": "Show or hide the side panel",
+
         "search": "Search", "library": "Library", "settings": "Settings",
         "offline1": "On this Mac, offline", "offline2": "Nothing leaves your device",
         "nStudio": "Studio", "nVoices": "Voices", "nDenoise": "Denoise", "nTasks": "Tasks",
@@ -251,6 +258,13 @@ struct Strings {
     static let ko: [String: String] = [
         "korean": "한국어", "english": "English",
         "langOfEnglish": "영어", "langOfKorean": "한국어",
+
+        // 아이콘 버튼 호버 툴팁.
+        "tipPlayBlock": "이 문단부터 재생",
+        "tipPlayPause": "재생 / 일시정지",
+        "tipRegen": "이 문단 다시 렌더",
+        "tipScorecard": "품질 점수표 보기",
+        "tipInspector": "사이드 패널 열기/닫기",
 
         "search": "검색", "library": "라이브러리", "settings": "설정",
         "offline1": "이 맥에서, 오프라인", "offline2": "기기 밖으로 나가지 않아요",

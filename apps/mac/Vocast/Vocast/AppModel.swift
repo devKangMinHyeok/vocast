@@ -93,6 +93,7 @@ final class AppModel {
     private var regenTask: Task<Void, Never>?
     private var studioPlayer: AVPlayer?
     private var studioTimeObserver: Any?
+    private var studioEndObserver: Any?
 
     init() {
         // Launch the local engine as a child process and point the client at it.
@@ -490,27 +491,66 @@ final class AppModel {
 
     // MARK: Studio transport playback (real composed audio)
 
+    /// Create the shared studio player (its time observer, and an end-of-playback
+    /// observer) on first use.
+    private func ensureStudioPlayer() {
+        guard studioPlayer == nil, let url = studio.audioURL else { return }
+        let player = AVPlayer(url: url)
+        studioTimeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.08, preferredTimescale: 600), queue: .main
+        ) { [weak self] time in
+            guard let self else { return }
+            let sec = time.seconds
+            self.studio.currentTime = sec
+            if let idx = self.studio.words.lastIndex(where: { $0.s <= sec }) {
+                self.studio.karaokeWordIndex = idx
+            }
+        }
+        // When playback reaches the end, flip the button back to "play" (not pause)
+        // and leave the playhead at the end; the next play restarts from the top.
+        studioEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.studio.playing = false
+            self.studio.playingBlockID = nil
+        }
+        studioPlayer = player
+    }
+
+    /// True when the playhead is parked at (or past) the end of the narration.
+    private var studioAtEnd: Bool {
+        studio.totalDuration > 0 && studio.currentTime >= studio.totalDuration - 0.15
+    }
+
     func studioPlayToggle() {
-        guard let url = studio.audioURL else { return }
+        guard studio.audioURL != nil else { return }
         if studio.playing {
             studioPlayer?.pause()
             studio.playing = false
             return
         }
-        if studioPlayer == nil {
-            let player = AVPlayer(url: url)
-            studioTimeObserver = player.addPeriodicTimeObserver(
-                forInterval: CMTime(seconds: 0.08, preferredTimescale: 600), queue: .main
-            ) { [weak self] time in
-                guard let self else { return }
-                let sec = time.seconds
-                self.studio.currentTime = sec
-                if let idx = self.studio.words.lastIndex(where: { $0.s <= sec }) {
-                    self.studio.karaokeWordIndex = idx
-                }
-            }
-            studioPlayer = player
+        ensureStudioPlayer()
+        studio.playingBlockID = nil   // bottom transport drives the whole narration
+        if studioAtEnd { studioSeek(to: 0) }   // finished → replay from the start
+        studioPlayer?.play()
+        studio.playing = true
+    }
+
+    /// Play from the start of one block (its play button). Toggles to pause if that
+    /// same block is already playing. Blocks are concatenated, so this seeks to the
+    /// block's offset and plays on through the rest, like clicking the timeline there.
+    func studioPlayBlock(_ id: Block.ID) {
+        guard studio.audioURL != nil else { return }
+        studio.selectedBlockID = id
+        if studio.playing, studio.playingBlockID == id {
+            studioPlayer?.pause()
+            studio.playing = false
+            return
         }
+        ensureStudioPlayer()
+        studioSeek(to: studio.startOffset(of: id))
+        studio.playingBlockID = id
         studioPlayer?.play()
         studio.playing = true
     }
@@ -518,8 +558,10 @@ final class AppModel {
     func stopStudioPlayback() {
         studioPlayer?.pause()
         if let obs = studioTimeObserver { studioPlayer?.removeTimeObserver(obs); studioTimeObserver = nil }
+        if let obs = studioEndObserver { NotificationCenter.default.removeObserver(obs); studioEndObserver = nil }
         studioPlayer = nil
         studio.playing = false
+        studio.playingBlockID = nil
     }
 
     func studioSeek(to sec: Double) {

@@ -207,6 +207,16 @@ final class StudioModel {
     // Transport
     var playing = false
     var currentTime: Double = 0
+    /// The block whose play button started the current playback, so that block's
+    /// button shows a pause glyph. nil when the bottom transport drives playback.
+    var playingBlockID: Block.ID?
+
+    /// Start offset (seconds) of a block in the composed narration: the blocks are
+    /// concatenated in order, so it is the summed duration of everything before it.
+    func startOffset(of id: Block.ID) -> Double {
+        guard let idx = blocks.firstIndex(where: { $0.id == id }) else { return 0 }
+        return blocks.prefix(idx).reduce(0) { $0 + $1.duration }
+    }
 
     // Render job progress mirror (for footer chip)
     var rendering = false

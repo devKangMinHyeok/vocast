@@ -195,8 +195,9 @@ struct BlockCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 16) {
-                PlayCircle(playing: false, size: 34, filled: false) {
-                    app.studio.selectedBlockID = block.id
+                PlayCircle(playing: app.studio.playing && app.studio.playingBlockID == block.id,
+                           size: 34, filled: false, help: app.s["tipPlayBlock"]) {
+                    app.studioPlayBlock(block.id)
                 }
                 Text(block.text)
                     .font(.ui(16))
@@ -222,8 +223,9 @@ struct BlockCard: View {
                 }
                 Text(fmtTime(block.duration)).font(.mono(12)).foregroundStyle(Palette.mute)
                 VersionPill(text: "v\(block.version)")
-                IconButton(systemImage: "arrow.triangle.2.circlepath") { app.regenerateBlock(block.id) }
-                IconButton(systemImage: "chart.bar.xaxis") {
+                IconButton(systemImage: "arrow.triangle.2.circlepath",
+                           help: app.s["tipRegen"]) { app.regenerateBlock(block.id) }
+                IconButton(systemImage: "chart.bar.xaxis", help: app.s["tipScorecard"]) {
                     app.studio.selectedBlockID = block.id
                     app.inspectorVisible = true
                 }
@@ -288,7 +290,8 @@ struct Transport: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            PlayCircle(playing: app.studio.playing, size: 42, filled: true) {
+            PlayCircle(playing: app.studio.playing, size: 42, filled: true,
+                       help: app.s["tipPlayPause"]) {
                 app.studioPlayToggle()
             }
             Text(fmtTime(app.studio.currentTime)).font(.mono(13)).foregroundStyle(Palette.body)

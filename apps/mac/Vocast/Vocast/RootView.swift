@@ -164,7 +164,7 @@ struct InspectorToggle: View {
             .fullClickArea()
         }
         .buttonStyle(.plain)
-        .help("Toggle inspector")
+        .help(app.s["tipInspector"])
     }
 }
 
