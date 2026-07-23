@@ -28,24 +28,31 @@
 1. **긴 대시 구분자 금지**: 유니코드 U+2014(em dash)와 U+2015를 응답과 생성 콘텐츠/코드/예제
    어디에도 쓰지 않는다. 쉼표/콜론/마침표/괄호로 바꾸거나 문장을 다시 쓴다.
    (자동 차단 훅: `.claude/hooks/guard-no-emdash.py`, Write/Edit/MultiEdit에서 deny.)
-2. **랜딩 카피**: 영어, sentence case. 느낌표와 이모지 금지. 마케팅 과장 대신 사실과 수치.
-   용어 일관성(Vocast, on-device, one-time, voice cloning).
+2. **랜딩 카피**: 영어 우선 + 한국어 지원(이중언어). sentence case, 느낌표와 이모지 금지.
+   마케팅 과장 대신 사실과 수치. 용어 일관성(Vocast, on-device, one-time, voice cloning).
+   카피는 `landing/lib/i18n/{en,ko}.ts` 사전에서 온다(섹션에 하드코딩 금지).
+   **한국어는 임의 기계번역하지 않는다**: 디자인 핸드오프로 채우기 전까지 영어로 폴백한다.
 3. **디자인(Timbre DS)**: 색/타입/여백/라운드는 DS 토큰(`--rc-*`)에서만 가져온다. 다크 전용.
    카드는 hairline 보더 + 그림자 없음. 버튼 채움색은 흰색만. 브랜드 오렌지(#f5732b)는 워드마크
    마침표, 강조 단어, 지표 마크에만. 새 색/폰트/간격을 도입하지 않는다. 자세히는 `/timbre-design`.
-4. **정적 export / basePath 함정**:
-   - 공개 파일/라우트의 절대경로는 `landing/lib/asset.ts`의 `asset()`으로 basePath를 붙인다.
-   - **`next/link`는 basePath를 자동으로 붙인다.** `<Link href={asset(...)}>`로 쓰면
-     `/vocast/vocast/...`가 되어 404가 난다. `next/link`에는 깨끗한 경로(`/blog/slug/`)를 준다.
-   - 일반 `<a>`, `<img>`, CSS `url()`에는 `asset()`을 쓴다.
+4. **이중언어 라우팅 / 링크**:
+   - 라우트 그룹 `app/(en)/`(루트) + `app/(ko)/ko/`가 각자 루트 레이아웃을 가져
+     `<html lang>`이 로케일별로 나온다. 영어는 루트(`/`), 한국어는 `/ko/`. 페이지 본문은
+     `app/_pages`·`app/blog/_*-body.tsx`·`app/tools/_*-body.tsx` 공유 컴포넌트를 lang만 바꿔 재사용.
+   - 내부 링크는 `lib/site.ts`의 `localePath(lang, path)`로 로케일 접두를 붙인다.
+     절대 URL(메타/사이트맵/OG)은 `absLocale(lang, path)` / `abs()` / `absFromAsset()`.
+   - hreflang(en/ko/x-default)·canonical·og:locale은 `lib/metadata.ts`의
+     `pageMetadata(lang, {...})`가 만든다. 루트 레이아웃 기본 메타는 `rootMetadata(lang)`.
+   - 배포는 Vercel 루트(basePath 없음). `asset()`은 이제 경로를 그대로 돌려주는 하위호환 헬퍼.
    - Server Component 기본. 이벤트 핸들러/상태가 필요한 컴포넌트만 `"use client"`.
 5. **GitHub 노출 금지**: 유료 출시 후 저장소를 private로 전환 예정. 랜딩/블로그/구조화 데이터에
    GitHub 링크나 "오픈소스" 문구를 넣지 않는다.
 6. **작업 흐름**: landing 변경 시 `cd landing && pnpm exec next build`로 검증한 뒤 (Vercel과 동일)
    커밋한다. **커밋/푸시는 사용자가 요청할 때만.** main에서 작업 중이면 상관없지만 커밋 메시지
    끝에는 `Co-Authored-By` 라인을 남긴다.
-7. **SEO 단일 소스**: 사이트 전역 메타 상수는 `landing/lib/site.ts`. sitemap/robots/layout 메타/
-   JSON-LD(`lib/schema.ts`)가 모두 이걸 참조한다. 블로그 글을 추가/수정하면
+7. **SEO 단일 소스**: 사이트 전역 상수는 `landing/lib/site.ts`(로케일별 tagline/description/
+   keywords 포함), 메타 빌더는 `lib/metadata.ts`, JSON-LD 빌더는 `lib/schema.ts`(둘 다 lang
+   인자를 받음). sitemap/robots/페이지 메타가 모두 이걸 참조한다. 블로그 글을 추가/수정하면
    `landing/public/llms.txt`도 갱신한다. 감사는 `/review seo`, `/review geo`.
 8. **맥 앱은 항상 베타로 빌드**: 출시 전까지 프로덕션(release) 빌드를 뽑지 않는다. 기본은
    `make beta`(= `bash apps/mac/build_app.sh`)이고, 시안 아이콘의 "Vocast Beta"가 나온다.

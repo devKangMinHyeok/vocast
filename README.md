@@ -11,7 +11,7 @@ CLI · 로컬 웹 앱 · 맥 앱, 세 가지 방식으로 쓸 수 있다.
 
 ## 🌐 웹에서 바로 쓰기 (설치 불필요)
 
-**https://devkangminhyeok.github.io/vocast/**
+**https://vocast.me/tools/**
 
 ffmpeg.wasm으로 브라우저 안에서 직접 처리한다 — 파일이 서버로 전송되지 않고,
 내 컴퓨터(브라우저) 밖으로 나가지 않는다. 최초 접속 시 변환 엔진(약 30MB)을 한 번 내려받는다.
