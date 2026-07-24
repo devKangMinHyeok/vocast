@@ -11,6 +11,7 @@
 """
 import os
 import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -695,6 +696,93 @@ def job_output(job_id):
     p = os.path.join(storage.store.entity_dir("history", job_id, ensure=False),
                      "output.wav")
     return p if os.path.exists(p) else None
+
+
+# ---- 라이브러리: 오디오 내보내기 · 복제 · 가져오기 (Studio 라이브러리) ----
+
+def export_audio(job_id, fmt="wav", blocks=None):
+    """완성 나레이션을 오디오 파일로 내보낸다. fmt=wav|mp3. blocks가 주어지면
+    (0-based 문단 인덱스) 그 블록들만 잘라 순서대로 이어 붙인다. 만들어진 임시
+    파일 경로를 돌려준다(호출부가 send_file로 흘려보낸다)."""
+    fmt = (fmt or "wav").lower()
+    if fmt not in ("wav", "mp3"):
+        raise ValueError("지원하지 않는 형식이에요")
+    src = job_output(job_id)
+    if not src:
+        raise ValueError("결과 오디오가 없어요")
+
+    tmpdir = tempfile.mkdtemp(prefix="vocast-exp-")
+    base = src
+    if blocks:
+        import numpy as np
+        import soundfile as sf
+        job = get_job(job_id) or {}
+        paras = job.get("paragraphs") or []
+        data, sr = sf.read(src)
+        pieces = []
+        for i in blocks:
+            if not (0 <= i < len(paras)):
+                continue
+            s, e = paras[i].get("start"), paras[i].get("end")
+            if s is None or e is None:
+                raise ValueError("이 나레이션은 블록 구간 정보가 없어요")
+            a, b = max(0, int(float(s) * sr)), min(len(data), int(float(e) * sr))
+            if b > a:
+                pieces.append(data[a:b])
+        if not pieces:
+            raise ValueError("선택한 블록의 오디오를 찾을 수 없어요")
+        base = os.path.join(tmpdir, "sel.wav")
+        sf.write(base, np.concatenate(pieces), sr)
+
+    if fmt == "mp3":
+        from voxa.media.audio import run_ffmpeg
+        out = os.path.join(tmpdir, "out.mp3")
+        run_ffmpeg(["-i", base, "-c:a", "libmp3lame", "-b:a", "320k", out])
+        return out
+    if base is src:  # 원본을 임시로 복사해 다운로드 이름을 자유롭게 붙인다
+        out = os.path.join(tmpdir, "out.wav")
+        shutil.copyfile(src, out)
+        return out
+    return base
+
+
+def duplicate_history(job_id, title=None):
+    """완성 나레이션을 새 히스토리 항목으로 복제한다. 재생성 계보와 분리된 새
+    뿌리로 만들고(부모 없음, v1, 방금 시각), 새 id를 돌려준다."""
+    job = get_job(job_id)
+    if not job:
+        raise ValueError("작업을 찾을 수 없어요")
+    new_id = uuid.uuid4().hex[:10]
+    dup = dict(job)
+    dup.update({"id": new_id, "parent": None, "version": 1,
+                "created": time.strftime("%Y-%m-%d %H:%M"), "started_ts": time.time()})
+    if title:
+        dup["title"] = title.strip()[:60]
+    storage.store.write_doc("history", new_id, dup)
+    src = job_output(job_id)
+    if src and os.path.exists(src):
+        jdir = storage.store.entity_dir("history", new_id)
+        shutil.copyfile(src, os.path.join(jdir, "output.wav"))
+        storage.store.commit("history", new_id)
+    return new_id
+
+
+def import_history(manifest, audio_path):
+    """.vocast 번들(manifest dict + output.wav)을 히스토리에 등록한다. 새 뿌리
+    항목으로 넣고 새 id를 돌려준다."""
+    if not isinstance(manifest, dict):
+        raise ValueError("잘못된 프로젝트 파일이에요")
+    new_id = uuid.uuid4().hex[:10]
+    doc = dict(manifest)
+    doc.update({"id": new_id, "parent": None,
+                "created": time.strftime("%Y-%m-%d %H:%M"), "started_ts": time.time()})
+    doc.setdefault("status", "done")
+    storage.store.write_doc("history", new_id, doc)
+    if audio_path and os.path.exists(audio_path):
+        jdir = storage.store.entity_dir("history", new_id)
+        shutil.copyfile(audio_path, os.path.join(jdir, "output.wav"))
+        storage.store.commit("history", new_id)
+    return new_id
 
 
 def list_history(limit=20):

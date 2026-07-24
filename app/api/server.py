@@ -431,7 +431,63 @@ def jobs_audio_api(job_id):
 
 @app.get("/api/history")
 def history_api():
-    return jsonify(items=profiles.list_history())
+    # The Studio library shows every saved narration, not just the most recent
+    # handful, so this asks for a generous cap rather than the default 20.
+    return jsonify(items=profiles.list_history(limit=500))
+
+
+@app.get("/api/jobs/<job_id>/export")
+def jobs_export_api(job_id):
+    """완성 나레이션을 오디오로 내보낸다. format=wav|mp3, blocks=0,2,3(문단 선택)."""
+    fmt = (request.args.get("format") or "wav").lower()
+    blocks = None
+    if request.args.get("blocks"):
+        try:
+            blocks = [int(x) for x in request.args["blocks"].split(",") if x.strip()]
+        except ValueError:
+            return jsonify(error="블록 번호가 잘못됐어요"), 400
+    try:
+        path = profiles.export_audio(job_id, fmt, blocks)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    mime = "audio/mpeg" if fmt == "mp3" else "audio/wav"
+    return send_file(path, as_attachment=False,
+                     download_name=f"narration.{fmt}", mimetype=mime)
+
+
+@app.post("/api/history/<job_id>/duplicate")
+def history_duplicate_api(job_id):
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(id=profiles.duplicate_history(job_id, body.get("title")))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+
+
+@app.post("/api/history/import")
+def history_import_api():
+    """.vocast 번들 가져오기: manifest(폼 필드) + audio(output.wav 파일)."""
+    import json as _json
+    f = request.files.get("audio")
+    manifest_raw = request.form.get("manifest")
+    if not f or not manifest_raw:
+        return jsonify(error="프로젝트 파일이 불완전해요"), 400
+    try:
+        manifest = _json.loads(manifest_raw)
+    except ValueError:
+        return jsonify(error="잘못된 프로젝트 파일이에요"), 400
+    tmp = os.path.join(WORK, f"imp_{uuid.uuid4().hex[:8]}.wav")
+    f.save(tmp)
+    try:
+        new_id = profiles.import_history(manifest, tmp)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return jsonify(id=new_id)
 
 
 @app.get("/api/tasks")

@@ -457,6 +457,41 @@ final class EngineClient {
         return data
     }
 
+    /// Download URL for an exported narration. `format` is wav or mp3; `blocks` (0-based
+    /// paragraph indices) narrows the export to selected blocks, whole when nil.
+    func exportAudioURL(_ id: String, format: String, blocks: [Int]?) -> URL {
+        var comps = URLComponents(url: base.appendingPathComponent("api/jobs/\(id)/export"),
+                                  resolvingAgainstBaseURL: false)!
+        var q = [URLQueryItem(name: "format", value: format)]
+        if let blocks, !blocks.isEmpty {
+            q.append(URLQueryItem(name: "blocks", value: blocks.map(String.init).joined(separator: ",")))
+        }
+        comps.queryItems = q
+        return comps.url!
+    }
+
+    /// Duplicate a saved narration into a new history entry. Returns the new id.
+    func duplicateHistory(id: String, title: String?) async throws -> String {
+        let (data, resp) = try await jsonPost("/api/history/\(id)/duplicate",
+                                              body: title.map { ["title": $0] } ?? [:])
+        try check(resp, data)
+        struct R: Decodable { let id: String }
+        return try JSONDecoder().decode(R.self, from: data).id
+    }
+
+    /// Register a `.vocast` bundle (its manifest JSON + audio) as a new saved
+    /// narration. Returns the new id.
+    func importHistory(manifest: Data, audio: Data) async throws -> String {
+        let manifestStr = String(data: manifest, encoding: .utf8) ?? "{}"
+        let (data, resp) = try await multipartPost("/api/history/import", fields: [
+            .text(name: "manifest", value: manifestStr),
+            .file(name: "audio", filename: "output.wav", mime: "audio/wav", data: audio),
+        ])
+        try check(resp, data)
+        struct R: Decodable { let id: String }
+        return try JSONDecoder().decode(R.self, from: data).id
+    }
+
     // MARK: Work already done on this Mac
 
     /// Every async job the engine knows about, newest and still-running first.
