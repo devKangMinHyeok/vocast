@@ -16,6 +16,8 @@ struct StudioLibraryView: View {
             libraryBar($studio.libSearch)
             if app.studio.projects.isEmpty {
                 LibraryEmptyState()
+            } else if app.studio.filteredProjects.isEmpty {
+                LibraryNoResults()   // has projects, but the search matches none
             } else {
                 ScrollView {
                     LazyVStack(spacing: 10) {
@@ -235,6 +237,23 @@ struct LibraryEmptyState: View {
                     .multilineTextAlignment(.center).lineSpacing(3).frame(maxWidth: 360)
             }
             PrimaryButton(title: app.s["libEmptyCta"], systemImage: "plus") { app.newNarration() }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(Space.xl)
+    }
+}
+
+/// Shown when the library has narrations but the current search matches none, so
+/// the list area explains itself instead of going blank (which read as "wiped").
+struct LibraryNoResults: View {
+    @Environment(AppModel.self) private var app
+    var body: some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Image(systemName: "magnifyingglass").font(.system(size: 26)).foregroundStyle(Palette.ash)
+            Text(app.s["libNoResults"]).font(.ui(14.5, .medium)).foregroundStyle(Palette.mute)
+                .multilineTextAlignment(.center)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

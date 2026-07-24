@@ -342,7 +342,9 @@ struct VoiceResult: View {
 
             HStack(spacing: 12) {
                 SecondaryButton(title: app.s["vViewInLibrary"]) { app.voices.phase = .library }
-                PrimaryButton(title: app.s["vStartNarrating"]) { app.area = .studio }
+                // Reset the voices screen too, so returning to it later shows the
+                // library rather than re-displaying this (now stale) success screen.
+                PrimaryButton(title: app.s["vStartNarrating"]) { app.voices.phase = .library; app.area = .studio }
             }
             Spacer()
         }

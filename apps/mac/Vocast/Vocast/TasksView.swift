@@ -8,6 +8,7 @@ struct TasksView: View {
             VStack(alignment: .leading, spacing: Space.xl) {
                 group(app.s["taskGroupRunning"], app.tasks.running)
                 group(app.s["taskGroupQueued"], app.tasks.queued)
+                group(app.s["taskGroupFailed"], app.tasks.failed)
                 group(app.s["taskGroupDone"], app.tasks.done)
             }
             .padding(Space.xl)

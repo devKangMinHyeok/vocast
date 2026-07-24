@@ -154,7 +154,10 @@ struct Scorecard {
         add("scSubDrop", "Ending drop", take?.cliff)
         add("scSubClarity", "Word clarity", take?.swallow)
 
-        let weakest = sub.filter { !$0.pass }.min { $0.value < $1.value }
+        // Compare the numeric score, not the formatted string (lexicographic order
+        // breaks for negative or >= 10 values). value round-trips via Double exactly.
+        let weakest = sub.filter { !$0.pass }
+            .min { (Double($0.value) ?? 0) < (Double($1.value) ?? 0) }
         let attention: AttentionReason?
         if !meetsBar {
             attention = .belowBar
@@ -203,6 +206,11 @@ struct Block: Identifiable {
     var text: String
     var status: BlockStatus
     var duration: Double     // seconds
+    /// Absolute start (seconds) of this block in the composed narration, taken from
+    /// the paragraph's `start`. This includes the silent gaps the engine inserts
+    /// between paragraphs, so it is the real seek target. Summing durations would
+    /// drop those gaps and drift the playhead early.
+    var start: Double = 0
     var version: Int
     var peaks: [Double]
     var scorecard: Scorecard?   // nil when the engine reported no metrics for this block
@@ -247,7 +255,8 @@ struct NarrationProject: Identifiable {
     var voiceColor: Color {
         let palette: [Color] = [Palette.accent, Palette.accentBlue, Palette.good]
         guard let v = voiceID else { return Palette.stone }
-        return palette[abs(v.hashValue) % palette.count]
+        // Reduce first, then abs: abs(v.hashValue) alone traps on Int.min.
+        return palette[abs(v.hashValue % palette.count)]
     }
 }
 
@@ -300,11 +309,11 @@ final class StudioModel {
     /// button shows a pause glyph. nil when the bottom transport drives playback.
     var playingBlockID: Block.ID?
 
-    /// Start offset (seconds) of a block in the composed narration: the blocks are
-    /// concatenated in order, so it is the summed duration of everything before it.
+    /// Start offset (seconds) of a block in the composed narration. Uses the block's
+    /// absolute `start` (which includes inter-paragraph gaps) so a "play from here"
+    /// seek lands on the block's real audio, not summed-duration drift.
     func startOffset(of id: Block.ID) -> Double {
-        guard let idx = blocks.firstIndex(where: { $0.id == id }) else { return 0 }
-        return blocks.prefix(idx).reduce(0) { $0 + $1.duration }
+        blocks.first(where: { $0.id == id })?.start ?? 0
     }
 
     // Render job progress mirror (for footer chip)
@@ -575,6 +584,7 @@ final class TasksModel {
     var running: [Job] { jobs.filter { $0.state == .running } }
     var queued: [Job] { jobs.filter { $0.state == .queued } }
     var done: [Job] { jobs.filter { $0.state == .done } }
+    var failed: [Job] { jobs.filter { $0.state == .failed } }
 
     var runningCount: Int { running.count }
 
@@ -582,7 +592,8 @@ final class TasksModel {
         jobs.first { $0.id == selectedJobID } ?? running.first
     }
 
-    func clearFinished() { jobs.removeAll { $0.state == .done } }
+    // "Finished" covers both terminal states, so clearing sweeps failures too.
+    func clearFinished() { jobs.removeAll { $0.state == .done || $0.state == .failed } }
 }
 
 // MARK: - Settings

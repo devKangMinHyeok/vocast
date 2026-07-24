@@ -15,7 +15,7 @@ import sys
 import tempfile
 import uuid
 
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, jsonify, request, send_file
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -31,11 +31,6 @@ MEDIA_EXTS = {".mov", ".mp4", ".m4v", ".mkv", ".wav", ".m4a", ".mp3", ".aac"}
 MAX_TEXT_LEN = 20000  # 장문 원고 지원 (문단 배치 파이프라인 — 약 40분 분량)
 
 app = Flask(__name__)
-
-
-@app.get("/")
-def index():
-    return send_from_directory(os.path.join(HERE, "static"), "index.html")
 
 
 @app.get("/api/health")
@@ -251,7 +246,9 @@ def mcp_tools_api():
 def guide_api():
     """가이드 대본. lang 으로 언어를 고른다 (기본 한국어)."""
     lang = request.args.get("lang") or "ko"
-    return jsonify(sentences=profiles.guide_sentences(lang), lang=lang)
+    # 모르는 언어는 한국어로 폴백하므로, 실제로 내려주는 언어를 정확히 보고한다.
+    eff_lang = lang if lang in profiles.GUIDE_SCRIPTS else "ko"
+    return jsonify(sentences=profiles.guide_sentences(eff_lang), lang=eff_lang)
 
 
 @app.get("/api/profiles")
@@ -316,7 +313,11 @@ def profiles_build_async_api(pid):
 def profiles_rollback_api(pid):
     body = request.get_json(silent=True) or {}
     try:
-        return jsonify(profiles.rollback_profile(pid, int(body.get("version"))))
+        version = int(body.get("version"))
+    except (TypeError, ValueError):
+        return jsonify(error="버전 번호가 필요합니다"), 400
+    try:
+        return jsonify(profiles.rollback_profile(pid, version))
     except (TypeError, ValueError) as e:
         return jsonify(error=str(e) or "버전 번호가 필요합니다"), 400
     except FileNotFoundError:

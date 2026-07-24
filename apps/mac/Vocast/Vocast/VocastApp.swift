@@ -56,12 +56,11 @@ struct VocastCommands: Commands {
                 .keyboardShortcut(.space, modifiers: [])
         }
 
-        // View menu: inspector + search
+        // View menu: inspector toggle. (A global search command was removed here: it
+        // was wired to a no-op and there is no search surface for it to drive yet.)
         CommandGroup(after: .sidebar) {
             Button(app.s["menuToggleInspector"]) { app.inspectorVisible.toggle() }
                 .keyboardShortcut("i", modifiers: .command)
-            Button(app.s["menuSearch"]) { app.area = app.area }
-                .keyboardShortcut("k", modifiers: .command)
         }
     }
 }

@@ -11,9 +11,12 @@ final class AudioRecorder {
     var elapsed: Double = 0
 
     private let engine = AVAudioEngine()
-    // Written from the audio-tap thread; the tap is installed after this is set and
-    // removed before it is cleared, so there is a single writer at a time.
+    // Accessed from the audio-tap thread (write) and the main thread (stop clears it).
+    // `removeTap` does not fence an already-running tap block, so both accesses are
+    // serialized by `fileLock` to avoid a write racing the nil-assignment (which would
+    // otherwise be an unsynchronized reference release on the audio thread).
     nonisolated(unsafe) private var file: AVAudioFile?
+    private let fileLock = NSLock()
     private var timer: Timer?
     private var startedAt: Date?
 
@@ -42,7 +45,7 @@ final class AudioRecorder {
     func stop() {
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning { engine.stop() }
-        file = nil
+        fileLock.lock(); file = nil; fileLock.unlock()
         timer?.invalidate(); timer = nil
         recording = false
         level = 0
@@ -50,8 +53,11 @@ final class AudioRecorder {
     }
 
     private nonisolated func handle(_ buffer: AVAudioPCMBuffer) {
-        // Write on the audio thread (the supported pattern).
+        // Write on the audio thread (the supported pattern), serialized against stop()
+        // clearing `file` so the write cannot race the reference release.
+        fileLock.lock()
         try? file?.write(from: buffer)
+        fileLock.unlock()
 
         guard let ch = buffer.floatChannelData?[0] else { return }
         let n = Int(buffer.frameLength)
