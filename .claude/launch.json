@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "landing-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "vocast-landing", "dev"],
+      "port": 3000
+    }
+  ]
+}

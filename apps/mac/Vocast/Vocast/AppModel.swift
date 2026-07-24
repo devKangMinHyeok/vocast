@@ -3,6 +3,7 @@ import AppKit
 import Observation
 import UserNotifications
 import AVFoundation
+import UniformTypeIdentifiers
 
 // MARK: - Toast
 
@@ -1186,13 +1187,19 @@ final class AppModel {
     }
 
     /// Export the narration audio. WAV is a straight copy of the composed output;
-    /// MP3 and selected-block export need engine transcoding and land in a later step.
+    /// MP3 transcodes on the engine (ffmpeg); the selected scope slices the chosen
+    /// blocks. All land in the Downloads folder.
     func exportAudio(format: String) {
         guard let id = studio.exportSource else { return }
-        if format == "mp3" { notify(s["libSoon"]); return }
-        if studio.exportScope == .selected { notify(s["libSoon"]); return }
         studio.exportOpen = false
-        downloadToDownloads(from: engine.narrationAudioURL(id), as: exportBaseName(id) + ".wav")
+        var blocks: [Int]?
+        if studio.exportScope == .selected,
+           let sel = studio.selectedBlockID,
+           let idx = studio.blocks.firstIndex(where: { $0.id == sel }) {
+            blocks = [idx]
+        }
+        let url = engine.exportAudioURL(id, format: format, blocks: blocks)
+        downloadToDownloads(from: url, as: exportBaseName(id) + "." + format)
     }
 
     /// Export subtitles timed to the narration's blocks, as SRT or VTT.
@@ -1237,13 +1244,47 @@ final class AppModel {
         }
     }
 
-    /// Importing a `.vocast` file registers it back into the engine's history, which
-    /// arrives with the engine step.
-    func importProjectFile() { studio.exportOpen = false; notify(s["libSoon"]) }
+    /// Import a `.vocast` bundle: pick the file, unzip it, and register its manifest
+    /// and audio back into the engine's history so it joins the library.
+    func importProjectFile() {
+        studio.exportOpen = false
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        if let t = UTType(filenameExtension: "vocast") { panel.allowedContentTypes = [t] }
+        guard panel.runModal() == .OK, let src = panel.url else { return }
+        Task { @MainActor in
+            do {
+                let dir = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("vocast-import-\(UUID().uuidString)", isDirectory: true)
+                try Self.unzip(src, to: dir)
+                guard let manifestURL = Self.firstFile("manifest.json", under: dir),
+                      let audioURL = Self.firstFile("output.wav", under: dir) else {
+                    notify(s["errImport"]); return
+                }
+                let manifest = try Data(contentsOf: manifestURL)
+                let audio = try Data(contentsOf: audioURL)
+                _ = try await engine.importHistory(manifest: manifest, audio: audio)
+                try? FileManager.default.removeItem(at: dir)
+                await loadLibrary()
+                complete(s["toNarrationImported"])
+            } catch { notify(s["errImport"]) }
+        }
+    }
 
-    /// Duplicating copies a saved job to a new history entry, an engine operation
-    /// that arrives with the engine step.
-    func duplicateProject(_ id: String) { studio.openRowMenu = nil; notify(s["libSoon"]) }
+    /// Duplicate a saved narration into a new library entry titled with a copy suffix.
+    func duplicateProject(_ id: String) {
+        studio.openRowMenu = nil
+        let base = studio.projects.first { $0.id == id }?.title ?? ""
+        let title = base + s["libDuplicateSuffix"]
+        Task { @MainActor in
+            do {
+                _ = try await engine.duplicateHistory(id: id, title: title)
+                await loadLibrary()
+                complete(s["toNarrationDuplicated"])
+            } catch { notify(s["errExport"]) }
+        }
+    }
 
     func notify(_ message: String) { complete(message) }
 
@@ -1285,6 +1326,26 @@ final class AppModel {
                 exportedToast(filename)
             } catch { notify(s["errExport"]) }
         }
+    }
+
+    /// Unzip a `.vocast` bundle with ditto (handles the file coordinator's zip). The
+    /// bundle nests its files under a folder, so callers locate them with `firstFile`.
+    private static func unzip(_ src: URL, to dir: URL) throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        p.arguments = ["-x", "-k", src.path, dir.path]
+        try p.run()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else { throw EngineError.transport("unzip failed") }
+    }
+
+    /// Find the first file with `name` anywhere under `dir` (the bundle's layout may
+    /// nest one folder deep depending on how it was zipped).
+    private static func firstFile(_ name: String, under dir: URL) -> URL? {
+        guard let en = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil) else { return nil }
+        for case let u as URL in en where u.lastPathComponent == name { return u }
+        return nil
     }
 
     /// Zip a directory into a single archive using the file coordinator's upload

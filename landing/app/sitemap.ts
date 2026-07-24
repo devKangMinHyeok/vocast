@@ -29,6 +29,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     ...bilingual("/", { changeFrequency: "weekly", priority: 1 }),
     ...bilingual("/blog/", { changeFrequency: "weekly", priority: 0.7 }),
     ...bilingual("/tools/", { changeFrequency: "weekly", priority: 0.8 }),
+    ...bilingual("/compare/", { changeFrequency: "monthly", priority: 0.7 }),
     // /demo/ 는 public/ 정적 데모(영어 전용). 로케일 대안 없음.
     { url: abs("/demo/"), lastModified: now, changeFrequency: "monthly", priority: 0.6 },
   ];
