@@ -211,6 +211,46 @@ struct Block: Identifiable {
 enum StudioPhase { case empty, rendering, rendered }
 enum StudioViewMode { case blocks, karaoke }
 
+/// Which of the three Studio surfaces is showing. The library is the default: it
+/// lists saved narrations; the composer writes and renders a new one; the editor
+/// opens a saved narration for playback, block edits, and export.
+enum StudioNav { case library, composer, editor }
+
+/// What an export covers. From a library row it is always the whole narration;
+/// only the open editor can narrow it to the currently selected blocks.
+enum ExportScope { case whole, selected }
+
+/// What a rename dialog is renaming: a specific saved narration, or the one open
+/// in the editor.
+enum RenameTarget: Equatable { case project(String), editor }
+
+// MARK: - Narration library
+
+/// One saved narration in the library. Backed by the engine's persisted history:
+/// `id` is the head of a regeneration chain (the newest job that holds the current
+/// audio), and `chainIDs` is every history id in that chain so deleting the project
+/// removes all of them. Everything here is derived from the history document, so it
+/// survives an app restart without the app keeping its own copy.
+struct NarrationProject: Identifiable {
+    let id: String            // head job id (current audio lives here)
+    var title: String
+    var voiceID: String?      // profile_id at render time; nil when made from an upload
+    var voiceName: String
+    var duration: Double
+    var blockCount: Int
+    var created: String       // engine timestamp, e.g. "2026-07-20 08:26"
+    var chainIDs: [String]    // all history ids in this project's regen chain
+    var version: Int
+
+    /// A stable dot color per voice, so rows made with the same voice read together.
+    /// Missing voices are resolved to stone by the row, not here.
+    var voiceColor: Color {
+        let palette: [Color] = [Palette.accent, Palette.accentBlue, Palette.good]
+        guard let v = voiceID else { return Palette.stone }
+        return palette[abs(v.hashValue) % palette.count]
+    }
+}
+
 @MainActor @Observable
 final class StudioModel {
     var scriptText: String = StarterContent.script
@@ -218,6 +258,36 @@ final class StudioModel {
     var blocks: [Block] = []
     var selectedBlockID: Block.ID?
     var viewMode: StudioViewMode = .blocks
+
+    // MARK: Library (default surface)
+    /// Which of the three surfaces is showing. Studio opens on the library.
+    var nav: StudioNav = .library
+    /// Saved narrations, newest first, already collapsed to one row per project.
+    var projects: [NarrationProject] = []
+    /// The saved narration open in the editor (the head job id).
+    var activeProjectID: String?
+    var libSearch: String = ""
+    var libLoading = false
+    /// Real per-narration waveform thumbnails, keyed by head job id. Loaded lazily
+    /// so the list draws immediately and fills its waveforms as they decode.
+    var libPeaks: [String: [Double]] = [:]
+
+    // Library overlays / row menu
+    var openRowMenu: String?          // id of the row whose ⋯ menu is open
+    var renameTarget: RenameTarget?   // rename dialog target
+    var renameValue: String = ""
+    var exportOpen = false
+    var exportSource: String?         // head job id being exported
+    var exportScope: ExportScope = .whole
+    var deleteConfirm: String?        // project id awaiting delete confirmation
+
+    /// Rows filtered by the search box (title substring, case-insensitive). The
+    /// engine already returns newest-first, which is the only sort for now.
+    var filteredProjects: [NarrationProject] {
+        let q = libSearch.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return projects }
+        return projects.filter { $0.title.lowercased().contains(q) }
+    }
     /// Whether the voice-picker dropdown in the sub-toolbar is open, and which
     /// row the keyboard has highlighted while it is.
     var voiceMenuOpen = false
@@ -252,6 +322,19 @@ final class StudioModel {
     var words: [NWord] = []
     var audioDuration: Double = 0
     var transportPeaks: [Double] = []
+
+    /// The saved narration currently open in the editor, when it is in the library.
+    var activeProject: NarrationProject? {
+        activeProjectID.flatMap { id in projects.first { $0.id == id } }
+    }
+
+    /// Editor title: the saved project's title, or the script's first line for a
+    /// freshly rendered narration not yet reflected in the library list.
+    var editorTitle: String {
+        if let p = activeProject { return p.title }
+        let firstLine = scriptText.split(separator: "\n").first.map(String.init) ?? ""
+        return firstLine.trimmingCharacters(in: .whitespaces)
+    }
 
     var charCount: Int { scriptText.count }
     var totalDuration: Double {

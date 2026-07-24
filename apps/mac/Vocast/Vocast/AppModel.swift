@@ -134,6 +134,7 @@ final class AppModel {
             }
             await refreshWork()
             await loadProfilePeaks()
+            await loadLibrary()
         } else {
             engineReady = false
             resynthAvailable = false
@@ -321,6 +322,180 @@ final class AppModel {
         }
     }
 
+    // MARK: Studio library (persisted narrations)
+
+    /// Load saved narrations from the engine's history and collapse each
+    /// regeneration chain into one project row. Real waveform thumbnails decode
+    /// lazily so the list draws right away.
+    func loadLibrary() async {
+        studio.libLoading = true
+        defer { studio.libLoading = false }
+        guard let items = try? await engine.listHistory() else { return }
+        let projects = Self.collapseChains(items)
+        studio.projects = projects
+        for p in projects where studio.libPeaks[p.id] == nil {
+            Task { @MainActor in
+                if let peaks = await RealWaveform.peaks(from: engine.narrationAudioURL(p.id), count: 56) {
+                    studio.libPeaks[p.id] = peaks
+                }
+            }
+        }
+    }
+
+    /// One row per project: follow each history item's parent link to its chain
+    /// root, group by root, and keep the highest-version finished job as the head
+    /// (that is where the current audio lives). Non-narration history (profile
+    /// builds) is filtered out, and chains with no finished job are dropped.
+    static func collapseChains(_ items: [NHistoryItem]) -> [NarrationProject] {
+        let narr = items.filter { ($0.kind ?? "clone") == "clone" }
+        let byID = Dictionary(narr.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+
+        func root(_ item: NHistoryItem) -> String {
+            var cur = item
+            var seen: Set<String> = []
+            while let pj = cur.parent?.job, let parent = byID[pj], !seen.contains(cur.id) {
+                seen.insert(cur.id); cur = parent
+            }
+            return cur.id
+        }
+
+        var groups: [String: [NHistoryItem]] = [:]
+        for it in narr { groups[root(it), default: []].append(it) }
+
+        var out: [NarrationProject] = []
+        for (_, group) in groups {
+            let done = group.filter { $0.status == "done" }
+            guard let head = done.max(by: { ($0.version ?? 1) < ($1.version ?? 1) }) else { continue }
+            let duration = head.words?.last?.e
+                ?? head.paragraphs?.compactMap { $0.end }.max()
+                ?? 0
+            let blockCount = head.paragraphs?.count ?? Self.paragraphCount(head.text)
+            let title: String = {
+                if let t = head.title, !t.trimmingCharacters(in: .whitespaces).isEmpty { return t }
+                return Self.deriveTitle(head.text)
+            }()
+            out.append(NarrationProject(
+                id: head.id, title: title,
+                voiceID: head.profile_id, voiceName: head.profile ?? "",
+                duration: duration, blockCount: max(1, blockCount),
+                created: head.created ?? "",
+                chainIDs: group.map { $0.id }, version: head.version ?? 1))
+        }
+        // Grouping loses the engine's newest-first order; restore it by timestamp.
+        out.sort { $0.created > $1.created }
+        return out
+    }
+
+    private static func paragraphCount(_ text: String?) -> Int {
+        guard let text else { return 1 }
+        let n = text.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }.count
+        return max(1, n)
+    }
+
+    private static func deriveTitle(_ text: String?) -> String {
+        let firstLine = (text ?? "").split(separator: "\n").first.map(String.init) ?? ""
+        let trimmed = firstLine.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "Untitled" : String(trimmed.prefix(60))
+    }
+
+    /// Whether a project's voice is gone (profile deleted, or it was made from a
+    /// one-off upload). Playback and export still work; only re-render needs a voice.
+    func voiceMissing(_ p: NarrationProject) -> Bool {
+        guard let vid = p.voiceID else { return true }
+        return !backendProfiles.contains { $0.id == vid }
+    }
+
+    /// A saved narration's relative age, e.g. "2시간 전". Falls back to the date for
+    /// anything older than two weeks.
+    func relativeDate(_ created: String) -> String {
+        guard let date = Self.historyDateFormatter.date(from: created) else {
+            return String(created.prefix(10))
+        }
+        let sec = Date().timeIntervalSince(date)
+        if sec < 60 { return s["relJustNow"] }
+        if sec < 3600 { return s.f("relMinAgo", ["n": String(max(1, Int(sec / 60)))]) }
+        if sec < 86_400 { return s.f("relHourAgo", ["n": String(max(1, Int(sec / 3600)))]) }
+        let days = Int(sec / 86_400)
+        if days == 1 { return s["relYesterday"] }
+        if days < 7 { return s.f("relDayAgo", ["n": String(days)]) }
+        if days < 14 { return s["relLastWeek"] }
+        return String(created.prefix(10))
+    }
+
+    private static let historyDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        return f
+    }()
+
+    /// Open a saved narration in the editor, reconstructing its blocks, word
+    /// timeline and audio from the persisted job so it is fully editable again.
+    func openProject(_ id: String) {
+        studio.openRowMenu = nil
+        stopStudioPlayback()
+        studio.activeProjectID = id
+        Task { @MainActor in
+            guard let st = try? await engine.narrationStatus(id) else {
+                notify(s["errOpenNarration"]); return
+            }
+            let text = st.text ?? studio.scriptText
+            studio.scriptText = text
+            studio.renderJobID = id
+            studio.words = st.words ?? []
+            studio.audioDuration = narrationDuration(st)
+            studio.audioURL = engine.narrationAudioURL(id)
+            let full = await RealWaveform.peaks(from: engine.narrationAudioURL(id), count: 240) ?? []
+            studio.transportPeaks = full
+            studio.blocks = makeRealBlocks(st, text: text, fullPeaks: full)
+            studio.selectedBlockID = studio.blocks.first?.id
+            studio.karaokeWordIndex = 0
+            studio.currentTime = 0
+            studio.viewMode = .blocks
+            studio.phase = .rendered
+            studio.nav = .editor
+        }
+    }
+
+    /// Start a new narration in the empty composer.
+    func newNarration() {
+        stopStudioPlayback()
+        studio.activeProjectID = nil
+        studio.resetToEmptyScript()
+        studio.nav = .composer
+    }
+
+    /// Return to the library and refresh it (a render or delete may have changed it).
+    func backToLibrary() {
+        stopStudioPlayback()
+        studio.openRowMenu = nil
+        studio.nav = .library
+        Task { await loadLibrary() }
+    }
+
+    /// Rename a saved narration. Updated locally at once, then on the engine.
+    func renameProject(_ id: String, title: String) {
+        let t = title.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return }
+        if let i = studio.projects.firstIndex(where: { $0.id == id }) { studio.projects[i].title = t }
+        Task { @MainActor in try? await engine.renameHistory(id: id, title: t) }
+    }
+
+    /// Delete a saved narration and every job in its regeneration chain.
+    func deleteProject(_ id: String) {
+        guard let proj = studio.projects.first(where: { $0.id == id }) else { return }
+        studio.projects.removeAll { $0.id == id }
+        if studio.activeProjectID == id { studio.activeProjectID = nil; studio.nav = .library }
+        Task { @MainActor in
+            for jid in proj.chainIDs { try? await engine.deleteHistory(id: jid) }
+            await loadLibrary()
+            complete(s["toNarrationDeleted"])
+        }
+    }
+
     // MARK: Studio render
 
     func renderNarration() {
@@ -371,6 +546,11 @@ final class AppModel {
                         studio.currentTime = 0
                         studio.phase = .rendered
                         studio.rendering = false
+                        // The finished render is now a saved project: open it in the
+                        // editor and refresh the library so its row appears.
+                        studio.activeProjectID = jid
+                        studio.nav = .editor
+                        Task { await loadLibrary() }
                         job.state = .done
                         job.timeLabel = s["jobTimeJustNow"]
                         complete(s["toNarrationReady"])
@@ -629,6 +809,10 @@ final class AppModel {
                         studio.selectedBlockID = idx < blocks.count ? blocks[idx].id : blocks.first?.id
                         studio.currentTime = 0
                         studio.karaokeWordIndex = 0
+                        // The regen forked a new head job; make it the open project and
+                        // refresh the library so the row points at the current audio.
+                        studio.activeProjectID = jid
+                        Task { await loadLibrary() }
                         job.state = .done
                         job.timeLabel = s["jobTimeJustNow"]
                         complete(s.f("toBlockRerendered", ["n": String(idx + 1)]))
@@ -990,12 +1174,183 @@ final class AppModel {
         }
     }
 
-    // MARK: Export (fake) + lightweight toast
+    // MARK: Export (real, to the Downloads folder)
 
-    func exportNarration() { complete(s["toNarrationExported"]) }
-    func exportSelection() { complete(s["toBlocksExported"]) }
-    func exportCleaned() { complete(s["toCleanedExportedDl"]) }
+    /// Open the export sheet for a saved narration. From a library row the scope is
+    /// always the whole narration; the editor can pass `.selected`.
+    func openExport(source id: String, scope: ExportScope = .whole) {
+        studio.openRowMenu = nil
+        studio.exportSource = id
+        studio.exportScope = scope
+        studio.exportOpen = true
+    }
+
+    /// Export the narration audio. WAV is a straight copy of the composed output;
+    /// MP3 and selected-block export need engine transcoding and land in a later step.
+    func exportAudio(format: String) {
+        guard let id = studio.exportSource else { return }
+        if format == "mp3" { notify(s["libSoon"]); return }
+        if studio.exportScope == .selected { notify(s["libSoon"]); return }
+        studio.exportOpen = false
+        downloadToDownloads(from: engine.narrationAudioURL(id), as: exportBaseName(id) + ".wav")
+    }
+
+    /// Export subtitles timed to the narration's blocks, as SRT or VTT.
+    func exportSubtitle(format: String) {
+        guard let id = studio.exportSource else { return }
+        studio.exportOpen = false
+        Task { @MainActor in
+            guard let st = try? await engine.narrationStatus(id) else { notify(s["errExport"]); return }
+            let cues = Self.subtitleCues(st)
+            guard !cues.isEmpty else { notify(s["errExport"]); return }
+            let body = format == "vtt" ? Self.vtt(cues) : Self.srt(cues)
+            let name = exportBaseName(id) + "." + format
+            do {
+                let dest = try uniqueDownloadsURL(name)
+                try body.data(using: .utf8)?.write(to: dest)
+                exportedToast(name)
+            } catch { notify(s["errExport"]) }
+        }
+    }
+
+    /// Export the whole project as a `.vocast` bundle (manifest + audio) for backup
+    /// or moving to another Mac. Importing one arrives with the engine step.
+    func exportProjectFile() {
+        guard let id = studio.exportSource else { return }
+        studio.exportOpen = false
+        let name = exportBaseName(id) + ".vocast"
+        Task { @MainActor in
+            do {
+                let manifest = try await engine.rawJob(id)
+                let (audioTmp, _) = try await URLSession.shared.download(from: engine.narrationAudioURL(id))
+                let bundle = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("vocast-export-\(UUID().uuidString)", isDirectory: true)
+                try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+                try manifest.write(to: bundle.appendingPathComponent("manifest.json"))
+                try FileManager.default.moveItem(at: audioTmp, to: bundle.appendingPathComponent("output.wav"))
+                let zip = try Self.zipForUpload(bundle)
+                let dest = try uniqueDownloadsURL(name)
+                try FileManager.default.moveItem(at: zip, to: dest)
+                try? FileManager.default.removeItem(at: bundle)
+                exportedToast(name)
+            } catch { notify(s["errExport"]) }
+        }
+    }
+
+    /// Importing a `.vocast` file registers it back into the engine's history, which
+    /// arrives with the engine step.
+    func importProjectFile() { studio.exportOpen = false; notify(s["libSoon"]) }
+
+    /// Duplicating copies a saved job to a new history entry, an engine operation
+    /// that arrives with the engine step.
+    func duplicateProject(_ id: String) { studio.openRowMenu = nil; notify(s["libSoon"]) }
+
     func notify(_ message: String) { complete(message) }
+
+    // Export helpers
+
+    private func exportedToast(_ filename: String) {
+        complete(s.f("exportedBody", ["file": filename]))
+    }
+
+    private func exportBaseName(_ id: String) -> String {
+        let title = studio.projects.first { $0.id == id }?.title ?? studio.editorTitle
+        let source = title.trimmingCharacters(in: .whitespaces).isEmpty ? "narration" : title
+        let unsafe = CharacterSet(charactersIn: "/\\:*?\"<>|\n\r\t")
+        let cleaned = String(source.unicodeScalars.map { unsafe.contains($0) ? "_" : Character($0) })
+        return String(cleaned.prefix(60)).trimmingCharacters(in: .whitespaces)
+    }
+
+    private func uniqueDownloadsURL(_ filename: String) throws -> URL {
+        let dir = try FileManager.default.url(for: .downloadsDirectory, in: .userDomainMask,
+                                              appropriateFor: nil, create: true)
+        let ext = (filename as NSString).pathExtension
+        let base = (filename as NSString).deletingPathExtension
+        var dest = dir.appendingPathComponent(filename)
+        var n = 2
+        while FileManager.default.fileExists(atPath: dest.path) {
+            let candidate = ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)"
+            dest = dir.appendingPathComponent(candidate)
+            n += 1
+        }
+        return dest
+    }
+
+    private func downloadToDownloads(from src: URL, as filename: String) {
+        Task { @MainActor in
+            do {
+                let (tmp, _) = try await URLSession.shared.download(from: src)
+                let dest = try uniqueDownloadsURL(filename)
+                try FileManager.default.moveItem(at: tmp, to: dest)
+                exportedToast(filename)
+            } catch { notify(s["errExport"]) }
+        }
+    }
+
+    /// Zip a directory into a single archive using the file coordinator's upload
+    /// packaging (no third-party zip dependency). The coordinated copy is deleted
+    /// when the block returns, so it is copied out first.
+    private static func zipForUpload(_ dir: URL) throws -> URL {
+        let coordinator = NSFileCoordinator()
+        var coordErr: NSError?
+        var moved: URL?
+        var moveErr: Error?
+        coordinator.coordinate(readingItemAt: dir, options: [.forUploading], error: &coordErr) { zipURL in
+            let out = FileManager.default.temporaryDirectory
+                .appendingPathComponent("vocast-\(UUID().uuidString).zip")
+            do { try FileManager.default.copyItem(at: zipURL, to: out); moved = out }
+            catch { moveErr = error }
+        }
+        if let coordErr { throw coordErr }
+        if let moveErr { throw moveErr }
+        guard let moved else { throw EngineError.transport("zip failed") }
+        return moved
+    }
+
+    // Subtitle building (block-timed cues)
+
+    private static func subtitleCues(_ st: NJob) -> [(Double, Double, String)] {
+        let paras: [(String, Double?, Double?)]
+        if let ps = st.paragraphs, !ps.isEmpty {
+            paras = ps.map { ($0.text, $0.start, $0.end) }
+        } else {
+            let split = (st.text ?? "").components(separatedBy: "\n\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            paras = split.map { ($0, nil, nil) }
+        }
+        guard !paras.isEmpty else { return [] }
+        let total = st.words?.last?.e ?? paras.compactMap { $0.2 }.max() ?? Double(paras.count) * 4
+        var cues: [(Double, Double, String)] = []
+        var cursor = 0.0
+        let even = total / Double(max(1, paras.count))
+        for (text, start, end) in paras {
+            let s0 = start ?? cursor
+            let e0 = end ?? (s0 + even)
+            cues.append((s0, max(e0, s0 + 0.5), text))
+            cursor = e0
+        }
+        return cues
+    }
+
+    private static func srtStamp(_ t: Double) -> String {
+        let ms = Int((max(0, t) * 1000).rounded())
+        let h = ms / 3_600_000, m = (ms / 60_000) % 60, sec = (ms / 1000) % 60, milli = ms % 1000
+        return String(format: "%02d:%02d:%02d,%03d", h, m, sec, milli)
+    }
+    private static func vttStamp(_ t: Double) -> String {
+        srtStamp(t).replacingOccurrences(of: ",", with: ".")
+    }
+    private static func srt(_ cues: [(Double, Double, String)]) -> String {
+        cues.enumerated().map { i, c in
+            "\(i + 1)\n\(srtStamp(c.0)) --> \(srtStamp(c.1))\n\(c.2)\n"
+        }.joined(separator: "\n")
+    }
+    private static func vtt(_ cues: [(Double, Double, String)]) -> String {
+        "WEBVTT\n\n" + cues.map { c in
+            "\(vttStamp(c.0)) --> \(vttStamp(c.1))\n\(c.2)\n"
+        }.joined(separator: "\n")
+    }
 
     // MARK: New narration / primary actions
 
@@ -1059,8 +1414,7 @@ final class AppModel {
     func primaryAction() {
         switch area {
         case .studio:
-            studio.resetToEmptyScript()
-            studio.scriptText = StarterContent.script
+            newNarration()
         case .voices:
             voices.startFlow(suggesting: VoiceLanguage(rawValue: interfaceLanguage.rawValue) ?? .ko)
         case .denoise:

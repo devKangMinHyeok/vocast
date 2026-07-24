@@ -23,7 +23,7 @@ struct Sidebar: View {
                         .foregroundStyle(Palette.ash)
                         .padding(.leading, 12).padding(.bottom, 6)
 
-                    SidebarRow(area: .studio)
+                    SidebarRow(area: .studio, count: app.studio.projects.isEmpty ? nil : app.studio.projects.count)
                     SidebarRow(area: .voices, count: app.backendProfiles.count)
                     SidebarRow(area: .denoise)
                     SidebarRow(area: .tasks, count: max(app.tasks.runningCount, 0) > 0 ? app.tasks.runningCount : nil)

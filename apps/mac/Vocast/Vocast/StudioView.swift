@@ -8,11 +8,11 @@ struct StudioView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
-                subToolbar
-                if app.studio.phase == .rendered {
-                    RenderedStudio()
-                } else {
-                    ComposingStudio()
+                if app.studio.nav != .library { subToolbar }
+                switch app.studio.nav {
+                case .library:  StudioLibraryView()
+                case .composer: ComposingStudio()
+                case .editor:   RenderedStudio()
                 }
             }
             // Voice-picker dropdown: a full-pane catcher (a click anywhere closes
@@ -25,8 +25,13 @@ struct StudioView: View {
                     .padding(.top, 46)
                     .transition(.opacity)
             }
+            // Library overlays: export sheet, rename, and delete confirmation.
+            overlays
         }
         .animation(Motion.calm, value: app.studio.voiceMenuOpen)
+        .animation(Motion.calm, value: app.studio.exportOpen)
+        .animation(Motion.calm, value: app.studio.renameTarget)
+        .animation(Motion.calm, value: app.studio.deleteConfirm)
         // Keyboard for the voice dropdown lives here, on a view that is always
         // present, driving the observable highlight so there is no stale state.
         .onAppear { installVoiceKeys() }
@@ -60,35 +65,113 @@ struct StudioView: View {
         if let m = voiceKeyMonitor { NSEvent.removeMonitor(m); voiceKeyMonitor = nil }
     }
 
-    // Sub-toolbar changes with phase.
+    // Sub-toolbar changes with the Studio surface (the library has its own bar).
     @ViewBuilder private var subToolbar: some View {
-        if app.studio.phase == .rendered {
-            HStack(spacing: 14) {
-                @Bindable var studio = app.studio
-                Segmented(options: [(StudioViewMode.blocks, app.s["blocks"]), (.karaoke, app.s["karaoke"])],
-                          selection: $studio.viewMode)
-                Text("\(app.studio.blocks.count) \(app.s["blocksTotal"]) · \(fmtTime(app.studio.totalDuration)) \(app.s["totalSuffix"])")
-                    .font(.mono(12)).foregroundStyle(Palette.mute)
-                Spacer()
-                SecondaryButton(title: app.s["exportSel"]) { app.exportSelection() }
-                PrimaryButton(title: app.s["exportNarration"]) { app.exportNarration() }
-            }
-            .padding(.horizontal, Space.xl).frame(height: kBarHeight)
-            .overlay(alignment: .bottom) { Hairline() }
-        } else {
-            HStack(spacing: 14) {
+        if app.studio.nav == .editor { editorToolbar } else { composerToolbar }
+    }
+
+    /// The saved narration the editor's exports and renames act on.
+    private var editorSourceID: String? { app.studio.activeProjectID ?? app.studio.renderJobID }
+
+    @ViewBuilder private var editorToolbar: some View {
+        @Bindable var studio = app.studio
+        VStack(spacing: 0) {
+            // Row 1: back to library, project title + rename, voice, counters.
+            HStack(spacing: 12) {
+                BackToLibraryButton()
+                EditorTitleLabel()
+                Rectangle().fill(Palette.hairline).frame(width: 1, height: 16)
                 VoiceTrigger()
-                DotLabel(text: app.currentProfileFacts, color: Palette.good, mono: true)
                 Spacer()
                 Text("\(app.studio.charCount) / 20,000").font(.mono(12)).foregroundStyle(Palette.mute)
                 if let speed = app.rates?.narrationSpeedLabel {
                     Rectangle().fill(Palette.hairline).frame(width: 1, height: 16)
                     Text(speed).font(.mono(12)).foregroundStyle(Palette.ash)
-                        .help(app.s["stuScorecardNote"])
                 }
             }
             .padding(.horizontal, Space.xl).frame(height: kBarHeight)
             .overlay(alignment: .bottom) { Hairline() }
+
+            // Row 2: block/karaoke toggle, totals, export.
+            HStack(spacing: 14) {
+                Segmented(options: [(StudioViewMode.blocks, app.s["blocks"]), (.karaoke, app.s["karaoke"])],
+                          selection: $studio.viewMode)
+                Text("\(app.studio.blocks.count) \(app.s["blocksTotal"]) · \(fmtTime(app.studio.totalDuration)) \(app.s["totalSuffix"])")
+                    .font(.mono(12)).foregroundStyle(Palette.mute)
+                Spacer()
+                SecondaryButton(title: app.s["exportSel"]) {
+                    if let id = editorSourceID { app.openExport(source: id, scope: .selected) }
+                }
+                PrimaryButton(title: app.s["exportNarration"]) {
+                    if let id = editorSourceID { app.openExport(source: id, scope: .whole) }
+                }
+            }
+            .padding(.horizontal, Space.xl).frame(height: kBarHeight)
+            .overlay(alignment: .bottom) { Hairline() }
+        }
+    }
+
+    @ViewBuilder private var composerToolbar: some View {
+        HStack(spacing: 14) {
+            VoiceTrigger()
+            DotLabel(text: app.currentProfileFacts, color: Palette.good, mono: true)
+            Spacer()
+            Text("\(app.studio.charCount) / 20,000").font(.mono(12)).foregroundStyle(Palette.mute)
+            if let speed = app.rates?.narrationSpeedLabel {
+                Rectangle().fill(Palette.hairline).frame(width: 1, height: 16)
+                Text(speed).font(.mono(12)).foregroundStyle(Palette.ash)
+                    .help(app.s["stuScorecardNote"])
+            }
+        }
+        .padding(.horizontal, Space.xl).frame(height: kBarHeight)
+        .overlay(alignment: .bottom) { Hairline() }
+    }
+
+    @ViewBuilder private var overlays: some View {
+        if app.studio.exportOpen { StudioExportSheet() }
+        if let t = app.studio.renameTarget { StudioRenameDialog(target: t) }
+        if let id = app.studio.deleteConfirm { StudioDeleteDialog(projectID: id) }
+    }
+}
+
+// MARK: - Editor sub-toolbar deltas
+
+struct BackToLibraryButton: View {
+    @Environment(AppModel.self) private var app
+    @State private var hovering = false
+    var body: some View {
+        Button { app.backToLibrary() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
+                Text(app.s["backToLibrary"]).font(.ui(13, .medium))
+            }
+            .foregroundStyle(Palette.body)
+            .padding(.horizontal, 10).frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                .fill(hovering ? Palette.surfaceElevated : .clear))
+            .hairline(Radius.control, color: Palette.hairline)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).onHover { hovering = $0 }
+    }
+}
+
+struct EditorTitleLabel: View {
+    @Environment(AppModel.self) private var app
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(app.studio.editorTitle.isEmpty ? app.s["untitledNarration"] : app.studio.editorTitle)
+                .font(.ui(14, .semibold)).foregroundStyle(Palette.ink)
+                .lineLimit(1).truncationMode(.tail).frame(maxWidth: 280, alignment: .leading)
+            Button {
+                app.studio.renameValue = app.studio.editorTitle
+                app.studio.renameTarget = .editor
+            } label: {
+                Image(systemName: "pencil").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.mute)
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(app.s["rowRename"])
         }
     }
 }
@@ -165,8 +248,22 @@ struct ComposingStudio: View {
 
 struct RenderedStudio: View {
     @Environment(AppModel.self) private var app
+    private var voiceGone: Bool { app.studio.activeProject.map { app.voiceMissing($0) } ?? false }
     var body: some View {
         VStack(spacing: 0) {
+            if voiceGone {
+                HStack(spacing: 10) {
+                    Image(systemName: "person.crop.circle.badge.exclamationmark")
+                        .font(.system(size: 13)).foregroundStyle(Palette.mute)
+                    Text(app.s["editorVoiceGone"]).font(.ui(12.5)).foregroundStyle(Palette.mute)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, Space.xl).padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Palette.surface)
+                .overlay(alignment: .bottom) { Hairline() }
+            }
             if app.studio.viewMode == .blocks {
                 ScrollView {
                     VStack(spacing: Space.md) {

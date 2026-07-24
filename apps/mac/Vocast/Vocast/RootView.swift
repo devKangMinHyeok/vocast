@@ -222,7 +222,7 @@ struct InspectorPane: View {
 
     private var headerTitle: String {
         switch app.area {
-        case .studio: return app.studio.phase == .rendered ? app.s["qualityScorecard"] : app.s["inspectorT"]
+        case .studio: return app.studio.nav == .editor ? app.s["qualityScorecard"] : app.s["inspectorT"]
         case .denoise: return app.denoise.phase == .result ? app.s["qualityReport"] : app.s["inspectorT"]
         case .tasks: return app.tasks.running.first != nil ? app.s["jobDetailT"] : app.s["inspectorT"]
         default: return app.s["inspectorT"]
@@ -231,7 +231,7 @@ struct InspectorPane: View {
     private var headerMeta: String {
         switch app.area {
         case .studio:
-            if app.studio.phase == .rendered, let id = app.studio.selectedBlockID,
+            if app.studio.nav == .editor, let id = app.studio.selectedBlockID,
                let idx = app.studio.blocks.firstIndex(where: { $0.id == id }) {
                 return app.s.f("inspMetaBlock", ["n": String(idx + 1)])
             }
@@ -245,7 +245,7 @@ struct InspectorPane: View {
     @ViewBuilder private var content: some View {
         switch app.area {
         case .studio:
-            if app.studio.phase == .rendered, let block = app.studio.selectedBlock {
+            if app.studio.nav == .editor, let block = app.studio.selectedBlock {
                 // The scorecard keys off the active voice's language. Without a
                 // validated baseline the scores would be measured against something
                 // that does not apply, so they are withheld and said to be withheld.
