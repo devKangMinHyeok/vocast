@@ -84,7 +84,7 @@ struct StudioView: View {
                 VoiceTrigger()
                 Spacer()
                 Text("\(app.studio.charCount) / 20,000").font(.mono(12)).foregroundStyle(Palette.mute)
-                if let speed = app.rates?.narrationSpeedLabel {
+                if let speed = app.rates?.narrationSpeedLabel(app.s) {
                     Rectangle().fill(Palette.hairline).frame(width: 1, height: 16)
                     Text(speed).font(.mono(12)).foregroundStyle(Palette.ash)
                 }
@@ -117,7 +117,7 @@ struct StudioView: View {
             DotLabel(text: app.currentProfileFacts, color: Palette.good, mono: true)
             Spacer()
             Text("\(app.studio.charCount) / 20,000").font(.mono(12)).foregroundStyle(Palette.mute)
-            if let speed = app.rates?.narrationSpeedLabel {
+            if let speed = app.rates?.narrationSpeedLabel(app.s) {
                 Rectangle().fill(Palette.hairline).frame(width: 1, height: 16)
                 Text(speed).font(.mono(12)).foregroundStyle(Palette.ash)
                     .help(app.s["stuScorecardNote"])

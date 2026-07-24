@@ -7,6 +7,12 @@ import Darwin
 final class Sidecar {
     private var process: Process?
     private(set) var port: Int = 0
+    // Guards `process`, which the OS calls back on (terminationHandler) off the main
+    // thread while start()/stop() touch it on the main thread.
+    private let lock = NSLock()
+    // Write end of the sidecar log; retained so it can be closed instead of leaking
+    // a file descriptor for the process's lifetime.
+    private var logHandle: FileHandle?
 
     /// Start the engine and return its base URL (server may still be booting).
     /// Returns nil if it could not be launched (missing uv / engine dir); in that
@@ -18,9 +24,14 @@ final class Sidecar {
            let u = URL(string: s) {
             return u
         }
-        guard process == nil else {
-            return URL(string: "http://127.0.0.1:\(port)")
-        }
+        // Already running: hand back the live URL. If the child had died, its
+        // terminationHandler has already reset `process` to nil, so we fall through
+        // and re-spawn instead of returning a URL to a dead port.
+        lock.lock()
+        let alive = process != nil
+        let livePort = port
+        lock.unlock()
+        if alive { return URL(string: "http://127.0.0.1:\(livePort)") }
         guard let dir = engineDir(), let launch = launcher(in: dir) else {
             NSLog("Vocast: could not locate the engine directory or a Python launcher; not spawning sidecar.")
             return nil
@@ -59,14 +70,25 @@ final class Sidecar {
         // Pipe logs to a temp file for debugging.
         let logURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("vocast-sidecar.log")
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        try? logHandle?.close()   // close a prior handle if we are re-spawning
         if let fh = try? FileHandle(forWritingTo: logURL) {
             proc.standardOutput = fh
             proc.standardError = fh
+            logHandle = fh
+        }
+
+        // Reset `process` when the child exits or crashes, so a later start() re-spawns
+        // instead of handing back a dead port. Only clears if it is still the current
+        // process (a restart may have replaced it).
+        proc.terminationHandler = { [weak self] finished in
+            guard let self else { return }
+            self.lock.lock(); defer { self.lock.unlock() }
+            if self.process === finished { self.process = nil }
         }
 
         do {
             try proc.run()
-            process = proc
+            lock.lock(); process = proc; lock.unlock()
             NSLog("Vocast: sidecar launched on port \(p) (log: \(logURL.path))")
             return URL(string: "http://127.0.0.1:\(p)")
         } catch {
@@ -76,8 +98,14 @@ final class Sidecar {
     }
 
     func stop() {
-        process?.terminate()
-        process = nil
+        lock.lock()
+        let p = process
+        process = nil          // clear first so terminationHandler's === check no-ops
+        lock.unlock()
+        p?.terminationHandler = nil
+        p?.terminate()
+        try? logHandle?.close()
+        logHandle = nil
     }
 
     /// App-owned folder for downloaded models, keyed by bundle identifier so a beta
@@ -150,11 +178,15 @@ final class Sidecar {
         }
         guard bindResult == 0 else { return 8756 }
         var len = socklen_t(MemoryLayout<sockaddr_in>.size)
-        _ = withUnsafeMutablePointer(to: &addr) {
+        let nameResult = withUnsafeMutablePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 getsockname(fd, $0, &len)
             }
         }
-        return Int(UInt16(bigEndian: addr.sin_port))
+        let assigned = Int(UInt16(bigEndian: addr.sin_port))
+        // If getsockname failed, sin_port is still 0 from above; never hand the child
+        // port 0 (it would bind a random port the app can't reach). Fall back.
+        guard nameResult == 0, assigned != 0 else { return 8756 }
+        return assigned
     }
 }

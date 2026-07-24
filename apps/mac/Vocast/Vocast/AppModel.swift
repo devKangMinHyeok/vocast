@@ -90,11 +90,14 @@ final class AppModel {
     private var modelPollTask: Task<Void, Never>?
     private var dnPollTask: Task<Void, Never>?
     private var dnPlayer: AVPlayer?
+    private var dnEndObserver: Any?
     private var renderTask: Task<Void, Never>?
     private var regenTask: Task<Void, Never>?
+    private var reinforceTask: Task<Void, Never>?
     private var studioPlayer: AVPlayer?
     private var studioTimeObserver: Any?
     private var studioEndObserver: Any?
+    private var engineWatchdog: Task<Void, Never>?
 
     init() {
         // Launch the local engine as a child process and point the client at it.
@@ -105,8 +108,11 @@ final class AppModel {
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main
         ) { [weak self] _ in
+            self?.engineWatchdog?.cancel()
             self?.sidecar.stop()
         }
+
+        startEngineWatchdog()
 
         // Dev/test hook: preload a denoise file so the pipeline can be exercised
         // without driving the native open panel. Only active when the env var is set.
@@ -116,6 +122,27 @@ final class AppModel {
             denoise.fileName = url.lastPathComponent
             denoise.phase = .modeSelect
             area = .denoise
+        }
+    }
+
+    /// Periodically confirm the sidecar is still answering. If it died, health() fails;
+    /// sidecar.start() then re-spawns (it no-ops while the process is alive), and a full
+    /// checkEngine() re-runs the readiness handshake so the app recovers without a
+    /// restart. Only acts once the engine has come up at least once, so it never
+    /// interferes with the initial boot.
+    private func startEngineWatchdog() {
+        engineWatchdog?.cancel()
+        engineWatchdog = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                guard let self, !Task.isCancelled else { break }
+                guard self.engineReady, !self.engineStarting else { continue }
+                if (try? await self.engine.health()) == nil {
+                    self.engineReady = false
+                    if let url = self.sidecar.start() { self.engine.base = url }
+                    await self.checkEngine()
+                }
+            }
         }
     }
 
@@ -226,10 +253,21 @@ final class AppModel {
 
     /// The engine formats timestamps as "2026-07-20 08:26"; show just the time part
     /// for today and the date otherwise, rather than inventing "2 hr ago".
+    private static let localDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        return f
+    }()
+
     private static func shortDate(_ s: String?) -> String {
         guard let s, s.count >= 16 else { return "" }
         let day = String(s.prefix(10))
-        let today = ISO8601DateFormatter().string(from: Date()).prefix(10)
+        // The engine writes timestamps in local time, so "today" must be local too.
+        // ISO8601DateFormatter defaults to UTC, which mis-labels every job made
+        // before the UTC-offset hour each morning (e.g. before 09:00 in KST).
+        let today = localDayFormatter.string(from: Date())
         return day == today ? String(s.dropFirst(11)) : day
     }
 
@@ -260,7 +298,13 @@ final class AppModel {
     }
 
     // Shell UI state
-    var area: Area = .studio
+    var area: Area = .studio {
+        didSet {
+            // Leaving the denoise screen must stop its A/B preview; otherwise the
+            // AVPlayer keeps playing in the background after navigation.
+            if oldValue == .denoise, area != .denoise { stopDenoisePlayback() }
+        }
+    }
     var inspectorVisible = false   // closed by default; opened with the toolbar toggle
     var search = ""
     // Persisted across launches: once onboarding is finished it stays finished, so
@@ -627,6 +671,11 @@ final class AppModel {
                 return (s, e)
             }()
             let duration = span.map { $0.1 - $0.0 } ?? (per > 0 ? per : Double(6 + i))
+            // Absolute start in the composed audio. Real spans carry it directly
+            // (includes inter-paragraph gaps); the estimate mirrors the uniform-per
+            // or 6+i fallback durations so seek and waveform stay consistent.
+            let start = span?.0 ?? (per > 0 ? Double(i) * per
+                                            : Double(6 * i) + Double(i * (i - 1)) / 2)
 
             // Slice the real composed waveform for this block's time range.
             let slice: [Double]
@@ -644,7 +693,7 @@ final class AppModel {
                 slice = []            // no invented shape when there is no audio
             }
             return Block(text: t, status: .rendered,
-                         duration: duration,
+                         duration: duration, start: start,
                          version: 1, peaks: slice,
                          scorecard: .fromNarration(para: meta,
                                                    take: bestTake(st.takes, paragraph: i,
@@ -927,7 +976,8 @@ final class AppModel {
                         return
                     }
                     if st.status == "error" {
-                        voices.phase = .record; job.state = .done
+                        voices.phase = .record; job.state = .failed
+                        job.timeLabel = s["jobTimeFailed"]
                         notify(s.f("errBuildFailed", ["detail": st.error ?? s["errUnknownDetail"]]))
                         return
                     }
@@ -984,19 +1034,27 @@ final class AppModel {
 
     func reinforceProfile(_ id: String, urls: [URL]) {
         guard !urls.isEmpty else { return }
-        Task { @MainActor in
+        reinforceTask?.cancel()
+        reinforceTask = Task { @MainActor in
             do {
                 for u in urls { try await engine.addSource(pid: id, fileURL: u) }
                 let jobID = try await engine.buildProfile(pid: id)
-                while true {
+                // Bounded, cancelable poll (~7 min cap) instead of `while true`, so a
+                // stuck build cannot poll forever and navigating away cancels it.
+                var done = false
+                for _ in 0..<600 {
+                    if Task.isCancelled { return }
                     let st = try await engine.narrationStatus(jobID)
-                    if st.status == "done" { break }
+                    if st.status == "done" { done = true; break }
                     if st.status == "error" { notify(s["errReinforce"]); return }
                     try await Task.sleep(nanoseconds: 700_000_000)
                 }
+                guard done else { notify(s["errReinforce"]); return }
                 backendProfiles = (try? await engine.listProfiles()) ?? backendProfiles
                 complete(s["toProfileReinforced"])
-            } catch { notify(s["errReinforceProfile"]) }
+            } catch {
+                if !Task.isCancelled { notify(s["errReinforceProfile"]) }
+            }
         }
     }
 
@@ -1007,6 +1065,7 @@ final class AppModel {
             notify(s["errImportFirst"])
             return
         }
+        stopDenoisePlayback()   // a previous A/B preview must not keep playing
         denoise.phase = .processing
         denoise.progress = 0
         denoise.stageLabel = s["stPreparing"]
@@ -1054,7 +1113,7 @@ final class AppModel {
                     }
                     if st.status == "error" {
                         denoise.phase = .modeSelect
-                        job.state = .done
+                        job.state = .failed
                         job.timeLabel = s["jobTimeFailed"]
                         notify(s.f("errCleanupFailed", ["detail": st.error ?? s["errUnknownDetail"]]))
                         return
@@ -1101,9 +1160,25 @@ final class AppModel {
         }
         let kind = denoise.abMode == .cleaned ? "clean" : "orig"
         let url = engine.denoiseAudioURL(jid, kind: kind)
-        dnPlayer = AVPlayer(url: url)
+        let player = AVPlayer(url: url)
+        // Reset the button to "play" when the clip ends, instead of leaving it stuck
+        // on "pause" with nothing playing.
+        if let obs = dnEndObserver { NotificationCenter.default.removeObserver(obs) }
+        dnEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main
+        ) { [weak self] _ in self?.denoise.playing = false }
+        dnPlayer = player
         dnPlayer?.play()
         denoise.playing = true
+    }
+
+    /// Stop and tear down the A/B preview player. Called when leaving the denoise
+    /// screen so audio does not keep playing in the background after navigation.
+    func stopDenoisePlayback() {
+        dnPlayer?.pause()
+        if let obs = dnEndObserver { NotificationCenter.default.removeObserver(obs); dnEndObserver = nil }
+        dnPlayer = nil
+        denoise.playing = false
     }
 
     func denoiseSetAB(_ mode: ABMode) {
@@ -1124,7 +1199,7 @@ final class AppModel {
         let src = engine.denoiseFileURL(jid)
         Task { @MainActor in
             do {
-                let (tmp, _) = try await URLSession.shared.download(from: src)
+                let tmp = try await Self.downloadChecked(from: src)
                 try? FileManager.default.removeItem(at: dest)
                 try FileManager.default.moveItem(at: tmp, to: dest)
                 complete(s["toCleanedExported"])
@@ -1229,7 +1304,7 @@ final class AppModel {
         Task { @MainActor in
             do {
                 let manifest = try await engine.rawJob(id)
-                let (audioTmp, _) = try await URLSession.shared.download(from: engine.narrationAudioURL(id))
+                let audioTmp = try await Self.downloadChecked(from: engine.narrationAudioURL(id))
                 let bundle = FileManager.default.temporaryDirectory
                     .appendingPathComponent("vocast-export-\(UUID().uuidString)", isDirectory: true)
                 try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
@@ -1320,12 +1395,25 @@ final class AppModel {
     private func downloadToDownloads(from src: URL, as filename: String) {
         Task { @MainActor in
             do {
-                let (tmp, _) = try await URLSession.shared.download(from: src)
+                let tmp = try await Self.downloadChecked(from: src)
                 let dest = try uniqueDownloadsURL(filename)
                 try FileManager.default.moveItem(at: tmp, to: dest)
                 exportedToast(filename)
             } catch { notify(s["errExport"]) }
         }
+    }
+
+    /// Download `src` to a temp file, throwing on a non-2xx status. `URLSession.download`
+    /// does not throw on 4xx/5xx, so without this an error response (e.g. a JSON
+    /// `{"error": ...}` body from a 400/404) would be written to disk as the output
+    /// file and reported as a successful export.
+    private static func downloadChecked(from src: URL) async throws -> URL {
+        let (tmp, resp) = try await URLSession.shared.download(from: src)
+        if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            try? FileManager.default.removeItem(at: tmp)
+            throw EngineError.badResponse(http.statusCode, "")
+        }
+        return tmp
     }
 
     /// Unzip a `.vocast` bundle with ditto (handles the file coordinator's zip). The
@@ -1479,6 +1567,7 @@ final class AppModel {
         case .voices:
             voices.startFlow(suggesting: VoiceLanguage(rawValue: interfaceLanguage.rawValue) ?? .ko)
         case .denoise:
+            stopDenoisePlayback()   // starting a fresh import stops the A/B preview
             denoise.phase = .importEmpty
         case .tasks:
             tasks.clearFinished()

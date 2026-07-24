@@ -178,10 +178,11 @@ struct EngineRates: Decodable {
     let dn_standard: Double?
     let dn_resynth: Double?
 
-    /// How the render speed reads to a person, from the measured number.
-    var narrationSpeedLabel: String? {
+    /// How the render speed reads to a person, from the measured number. Localized,
+    /// so it follows the interface language like the rest of the copy.
+    func narrationSpeedLabel(_ s: Strings) -> String? {
         guard let r = clone_rtf, r > 0 else { return nil }
-        return String(format: "~%.0fx slower than realtime", r)
+        return s.f("narrationSpeedLabel", ["x": String(format: "%.0f", r)])
     }
 }
 

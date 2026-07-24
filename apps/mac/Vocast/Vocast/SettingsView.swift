@@ -106,7 +106,10 @@ struct GeneralPane: View {
                 Divider().overlay(Palette.hairline)
                 SettingRow(label: app.s["setDefaultProfile"]) {
                     Picker("", selection: $settings.defaultProfile) {
-                        ForEach(app.backendProfiles.map(\.name), id: \.self) { Text($0).tag($0) }
+                        // Iterate profiles by their unique id, not by name: two profiles
+                        // can share a name, and a ForEach keyed on name would produce
+                        // duplicate ids and mis-render.
+                        ForEach(app.backendProfiles) { p in Text(p.name).tag(p.name) }
                     }.fixedSize().labelsHidden()
                 }
             }
@@ -178,7 +181,9 @@ struct AudioPane: View {
                 Divider().overlay(Palette.hairline)
                 SettingRow(label: app.s["setExportFormat"]) {
                     Picker("", selection: $settings.exportFormat) {
-                        ForEach(["WAV", "MP3", "M4A"], id: \.self) { Text($0).tag($0) }
+                        // Only formats the engine can actually export (WAV/MP3). M4A was
+                        // offered but the export endpoint does not support it.
+                        ForEach(["WAV", "MP3"], id: \.self) { Text($0).tag($0) }
                     }.fixedSize().labelsHidden()
                 }
                 Divider().overlay(Palette.hairline)

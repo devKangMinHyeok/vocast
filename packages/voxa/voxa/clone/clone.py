@@ -326,6 +326,28 @@ def splice_paragraphs_meta(paragraphs, index, new_dur):
     return out
 
 
+def _speech_presence(wav_path):
+    """녹음에 실제 말소리가 있는지 신호만으로 대략 판별 (Whisper 독립).
+
+    Whisper는 무음·지속 톤에도 그럴듯한 문장을 환각 전사하므로 빈 텍스트
+    가드만으론 비발화 녹음을 못 거른다. 말은 음절·자음·쉼이 교차해 프레임
+    에너지의 동적 범위가 크지만, 무음은 전체가 바닥에 깔리고 지속 톤은
+    프레임 에너지가 거의 일정하다. peak_db 와 동적 범위(dyn_range_db)를
+    돌려준다. 레벨 보정 전에 재야 정확하다 (보정이 무음을 끌어올리므로).
+    """
+    import numpy as np
+    import soundfile as sf
+    y, sr = sf.read(wav_path, dtype="float32")
+    if y.ndim > 1:
+        y = y.mean(axis=1)
+    hop = max(int(sr * 0.03), 1)
+    nf = max(len(y) // hop, 1)
+    frames = y[: nf * hop].reshape(nf, hop)
+    db = 20 * np.log10(np.maximum(np.sqrt((frames ** 2).mean(axis=1)), 1e-9))
+    peak = float(np.percentile(db, 90))
+    return peak, peak - float(np.percentile(db, 10))
+
+
 def prepare_performance(rec_path, workdir, denoise=True):
     """사용자 연기 녹음 → (참조 wav, 받아쓰기). 연기 반영 재생성의 준비 단계.
 
@@ -341,6 +363,12 @@ def prepare_performance(rec_path, workdir, denoise=True):
         run_ffmpeg(["-i", rec_path, "-t", "300",
                     "-af", "aformat=channel_layouts=mono",
                     "-c:a", "pcm_s16le", perf])
+    # 말소리 확인 (레벨 보정 전): 무음(피크 바닥) 또는 지속 톤/정상 소음(동적
+    # 범위 없음)이면 반려. 실제 말은 쉼·자음 때문에 동적 범위가 늘 넉넉하다.
+    peak_db, dyn_db = _speech_presence(perf)
+    if peak_db < -50.0 or dyn_db < 6.0:
+        raise RuntimeError("연기 녹음에서 말소리를 찾지 못했습니다. "
+                           "조용한 곳에서 문장을 또렷하게 읽어주세요.")
     from voxa.media.audio import normalize_speech_level
     normalize_speech_level(perf)
     from voxa import mlx_transcribe
